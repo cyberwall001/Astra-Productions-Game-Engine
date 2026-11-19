@@ -1,0 +1,8 @@
+Fonts bundled with Astra Studio
+==============================
+
+Roboto-Medium.ttf, DroidSans.ttf, Cousine-Regular.ttf, Karla-Regular.ttf
+are distributed with Dear ImGui (https://github.com/ocornut/imgui) and are
+licensed under the Apache License, Version 2.0.
+
+See https://www.apache.org/licenses/LICENSE-2.0 for the full text.

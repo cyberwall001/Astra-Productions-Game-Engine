@@ -1,0 +1,75 @@
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows x64 (MSVC)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake --preset windows-msvc
+
+      - name: Build
+        run: cmake --build --preset windows-msvc-release
+
+      - name: Unit + UI smoke tests
+        run: ctest --preset windows-msvc
+
+      - name: Package
+        shell: pwsh
+        run: ./tools/package_windows.ps1 -Configuration Release
+
+      - name: Upload the downloadable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: astra-studio-windows-x64
+          path: dist/astra-studio-*-windows-x64.zip
+          if-no-files-found: error
+
+      - name: Upload crash logs and test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-failure-logs
+          path: |
+            build/windows-msvc/Testing/**
+          if-no-files-found: ignore
+
+  headless:
+    name: Headless tools + UI screenshots (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Configure
+        run: cmake --preset headless
+
+      - name: Build
+        run: cmake --build --preset headless
+
+      - name: Self-check + UI smoke test
+        run: ctest --preset headless
+
+      - name: Render UI screenshots
+        run: |
+          ./build/headless/astra_uipreview --out docs/screenshots
+          python3 tools/recompress_png.py docs/screenshots
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: docs/screenshots/*.png
+          if-no-files-found: error
