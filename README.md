@@ -96,7 +96,7 @@ src/keygen            AstraKeyForge.exe entry point (GUI + --issue-code CLI)
 src/tools             self-check suite and headless UI renderer
 assets/               logo, fonts, demo workspace fixture
 extern/               Dear ImGui 1.91.9b-docking, stb_image
-docs/                 architecture, security, UI guide, build guide, roadmap, screenshots
+docs/                 architecture, security, UI guide, build + release guides, roadmap, screenshots
 tools/                packaging, screenshot capture, PNG recompression
 ```
 
@@ -107,6 +107,7 @@ tools/                packaging, screenshot capture, PNG recompression
 * [docs/UI_GUIDE.md](docs/UI_GUIDE.md) — design tokens, components, layout rules, motion
 * [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md) — prerequisites, presets, packaging, troubleshooting
 * [docs/ROADMAP.md](docs/ROADMAP.md) — viewport, renderer, gameplay, team workflow
+* [docs/RELEASING.md](docs/RELEASING.md) — how every merge to `main` becomes a `v0.x` release
 
 ## Dependencies
 
