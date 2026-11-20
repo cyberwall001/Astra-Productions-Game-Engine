@@ -64,7 +64,8 @@ struct WindowConfig {
 };
 
 // Creates the GLFW window + ImGui context. Returns nullptr on failure.
-GLFWwindow* CreateWindow(const WindowConfig& config, bool& outGlfwReady) {
+// Not "CreateWindow": winuser.h defines that as a macro and MSVC expands it.
+GLFWwindow* CreateMainWindow(const WindowConfig& config, bool& outGlfwReady) {
     glfwSetErrorCallback(GlfwErrorCallback);
     outGlfwReady = glfwInit() == GLFW_TRUE;
     if (!outGlfwReady) {
@@ -121,7 +122,8 @@ GLFWwindow* CreateWindow(const WindowConfig& config, bool& outGlfwReady) {
     return window;
 }
 
-void DestroyWindow(GLFWwindow* window, bool glfwReady) {
+// Not "DestroyWindow": that one is a winuser.h macro too.
+void DestroyMainWindow(GLFWwindow* window, bool glfwReady) {
     if (window) {
         ImGui_ImplOpenGL3_Shutdown();
         ImGui_ImplGlfw_Shutdown();
@@ -161,9 +163,9 @@ int RunLoop(GLFWwindow* window, DrawFn draw, QuitFn shouldQuit) {
 int RunStudioWindow() {
     const WindowConfig config{"Astra Studio", 1440, 900};
     bool glfwReady = false;
-    GLFWwindow* window = CreateWindow(config, glfwReady);
+    GLFWwindow* window = CreateMainWindow(config, glfwReady);
     if (!window) {
-        DestroyWindow(nullptr, glfwReady);
+        DestroyMainWindow(nullptr, glfwReady);
         return 1;
     }
 
@@ -174,16 +176,16 @@ int RunStudioWindow() {
                                [&studio] { return studio.wantsQuit; });
 
     studio.Shutdown();
-    DestroyWindow(window, glfwReady);
+    DestroyMainWindow(window, glfwReady);
     return result;
 }
 
 int RunKeyForgeWindow() {
     const WindowConfig config{"Astra KeyForge - owner tool", 1180, 780};
     bool glfwReady = false;
-    GLFWwindow* window = CreateWindow(config, glfwReady);
+    GLFWwindow* window = CreateMainWindow(config, glfwReady);
     if (!window) {
-        DestroyWindow(nullptr, glfwReady);
+        DestroyMainWindow(nullptr, glfwReady);
         return 1;
     }
 
@@ -193,7 +195,7 @@ int RunKeyForgeWindow() {
     const int result = RunLoop(window, [&keyForge] { keyForge.Draw(); },
                                [&keyForge] { return keyForge.wantsQuit; });
 
-    DestroyWindow(window, glfwReady);
+    DestroyMainWindow(window, glfwReady);
     return result;
 }
 
