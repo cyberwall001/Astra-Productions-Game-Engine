@@ -1,5 +1,12 @@
 # Astra Productions Game Engine
 
+[![Latest release](https://img.shields.io/github/v/release/cyberwall001/Astra-Productions-Game-Engine?label=release&color=FF5F5A)](https://github.com/cyberwall001/Astra-Productions-Game-Engine/releases/latest)
+[![Windows build](https://github.com/cyberwall001/Astra-Productions-Game-Engine/actions/workflows/windows.yml/badge.svg)](https://github.com/cyberwall001/Astra-Productions-Game-Engine/actions/workflows/windows.yml)
+
+**Download:** every merge to `main` publishes a fresh `v0.x` build — grab
+`astra-studio-<version>-windows-x64.zip` from
+[Releases](https://github.com/cyberwall001/Astra-Productions-Game-Engine/releases/latest).
+
 A storm-chasing game engine and studio, written from scratch in C++17 for Windows.
 No Unity, no Unreal, no wrapper: the window layer, crypto, account registry, offline
 access-code licensing, GitHub project hub and the whole UI toolkit live in this repository.
