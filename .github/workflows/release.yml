@@ -90,7 +90,10 @@ jobs:
           $lines | ForEach-Object { Write-Host $_ }
           if ($code -ne 0) {
             $hits = $lines | Where-Object { $_ -match 'error [A-Z]+[0-9]+' -or $_ -match 'fatal error' } |
-                    Select-Object -Last 12
+                    Select-Object -Last 6
+            $notes = $lines | Where-Object { $_ -match 'note: see reference' -or $_ -match '\.cpp\(' } |
+                     Select-Object -Last 10
+            $hits = @($notes) + @($hits)
             if (-not $hits) { $hits = $lines | Select-Object -Last 12 }
             $tail = ($hits -join "`n")
             $tail = $tail.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
