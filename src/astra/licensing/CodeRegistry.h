@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <vector>
+#include <cstdint>
 
 #include "astra/core/Types.h"
 #include "astra/licensing/AccessCode.h"

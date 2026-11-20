@@ -4,6 +4,9 @@
 #include "astra/crypto/Encoding.h"
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <dpapi.h>
 #pragma comment(lib, "crypt32.lib")
@@ -50,7 +53,7 @@ std::string ProtectSecret(const std::string& plaintext) {
     input.cbData = static_cast<DWORD>(plaintext.size());
 
     DATA_BLOB output{};
-    if (CryptProtectData(&input,, L"Astra Studio GitHub token", nullptr, nullptr, nullptr,
+    if (CryptProtectData(&input, L"Astra Studio GitHub token", nullptr, nullptr, nullptr,
                          CRYPTPROTECT_UI_FORBIDDEN, &output)) {
         const std::string encoded = "dpapi:" + HexEncode(output.pbData, output.cbData);
         LocalFree(output.pbData);

@@ -4,6 +4,8 @@
 
 #include <string>
 #include <string_view>
+#include <cstdint>
+#include <vector>
 
 #include "astra/data/Json.h"
 #include "astra/github/GitHubModels.h"

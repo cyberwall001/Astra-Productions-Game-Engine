@@ -9,22 +9,57 @@ on:
 jobs:
   windows:
     name: Windows x64 (MSVC)
-    runs-on: windows-latest
+    # The VS 2022 generator in the windows-msvc preset needs the 2022 image;
+    # windows-latest has moved on to a newer Visual Studio.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake --preset windows-msvc
+        shell: pwsh
+        run: |
+          $lines = & cmake --preset windows-msvc 2>&1 | ForEach-Object { "$_" }
+          $code = $LASTEXITCODE
+          $lines | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            $tail = (($lines | Select-Object -Last 25) -join "`n")
+            $tail = $tail.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Host "::error title=cmake configure failed::$tail"
+            exit 1
+          }
 
       - name: Build
-        run: cmake --build --preset windows-msvc-release
+        shell: pwsh
+        run: |
+          $lines = & cmake --build --preset windows-msvc-release 2>&1 | ForEach-Object { "$_" }
+          $code = $LASTEXITCODE
+          $lines | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            $hits = $lines | Where-Object { $_ -match 'error [A-Z]+[0-9]+' -or $_ -match 'fatal error' } |
+                    Select-Object -Last 6
+            $notes = $lines | Where-Object { $_ -match 'note: see reference' -or $_ -match '\.cpp\(' } |
+                     Select-Object -Last 10
+            $hits = @($notes) + @($hits)
+            if (-not $hits) { $hits = $lines | Select-Object -Last 12 }
+            $tail = ($hits -join "`n")
+            $tail = $tail.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Host "::error title=windows build failed::$tail"
+            exit 1
+          }
 
       - name: Unit + UI smoke tests
         run: ctest --preset windows-msvc
 
       - name: Package
         shell: pwsh
-        run: ./tools/package_windows.ps1 -Configuration Release
+        run: |
+          try {
+            ./tools/package_windows.ps1 -Configuration Release
+          } catch {
+            $msg = $_.Exception.Message.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Host "::error title=packaging failed::$msg"
+            exit 1
+          }
 
       - name: Upload the downloadable build
         uses: actions/upload-artifact@v4
@@ -57,7 +92,15 @@ jobs:
         run: cmake --preset headless
 
       - name: Build
-        run: cmake --build --preset headless
+        run: |
+          set -o pipefail
+          status=0
+          cmake --build --preset headless 2>&1 | tee build.log || status=$?
+          if [ $status -ne 0 ]; then
+            message=$(tail -n 30 build.log | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
+            echo "::error title=linux build failed::$message"
+            exit $status
+          fi
 
       - name: Self-check + UI smoke test
         run: ctest --preset headless

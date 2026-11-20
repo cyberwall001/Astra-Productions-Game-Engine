@@ -21,7 +21,9 @@ jobs:
   release:
     name: Build, tag and publish
     if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip release]') }}
-    runs-on: windows-latest
+    # The VS 2022 generator in the windows-msvc preset needs the 2022 image;
+    # windows-latest has moved on to a newer Visual Studio.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,17 +70,50 @@ jobs:
           Set-Content CMakeLists.txt -Value $raw -NoNewline
 
       - name: Configure
-        run: cmake --preset windows-msvc
+        shell: pwsh
+        run: |
+          $lines = & cmake --preset windows-msvc 2>&1 | ForEach-Object { "$_" }
+          $code = $LASTEXITCODE
+          $lines | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            $tail = (($lines | Select-Object -Last 25) -join "`n")
+            $tail = $tail.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Host "::error title=cmake configure failed::$tail"
+            exit 1
+          }
 
       - name: Build
-        run: cmake --build --preset windows-msvc-release
+        shell: pwsh
+        run: |
+          $lines = & cmake --build --preset windows-msvc-release 2>&1 | ForEach-Object { "$_" }
+          $code = $LASTEXITCODE
+          $lines | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            $hits = $lines | Where-Object { $_ -match 'error [A-Z]+[0-9]+' -or $_ -match 'fatal error' } |
+                    Select-Object -Last 6
+            $notes = $lines | Where-Object { $_ -match 'note: see reference' -or $_ -match '\.cpp\(' } |
+                     Select-Object -Last 10
+            $hits = @($notes) + @($hits)
+            if (-not $hits) { $hits = $lines | Select-Object -Last 12 }
+            $tail = ($hits -join "`n")
+            $tail = $tail.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Host "::error title=windows build failed::$tail"
+            exit 1
+          }
 
       - name: Unit + UI smoke tests
         run: ctest --preset windows-msvc
 
       - name: Package
         shell: pwsh
-        run: ./tools/package_windows.ps1 -Configuration Release
+        run: |
+          try {
+            ./tools/package_windows.ps1 -Configuration Release
+          } catch {
+            $msg = $_.Exception.Message.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Host "::error title=packaging failed::$msg"
+            exit 1
+          }
 
       - name: Commit the bump, tag it and publish the release
         shell: pwsh

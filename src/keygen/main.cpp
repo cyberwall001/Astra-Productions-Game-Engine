@@ -108,7 +108,7 @@ int IssueFromCommandLine(char** argv, int argc) {
     if (count > 50) count = 50;
 
     const astra::license::Role role = ParseRole(roleText);
-    const astra::Bytes secret = astra::license::MasterKeyBytes();
+    astra::Bytes secret = astra::license::MasterKeyBytes();  // wiped on the way out
     const std::int64_t nowUtc = astra::time::NowUtc();
 
     astra::license::IssuedLedger ledger = astra::license::IssuedLedger::ForKeyForge();
@@ -172,8 +172,11 @@ int RunCli(int argc, char** argv) {
 
 #if defined(_WIN32) && defined(ASTRA_GUI_SUBSYSTEM)
 
-#include <shellapi.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
+#include <shellapi.h>
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     // A GUI-subsystem process has no argv, so rebuild it from the command line when the

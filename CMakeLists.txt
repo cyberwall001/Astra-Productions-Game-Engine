@@ -118,6 +118,10 @@ if(ASTRA_BUILD_STUDIO)
             target_link_libraries(astra_keyforge PRIVATE astra_engine astra_imgui_backends shell32)
             target_compile_definitions(astra_keyforge PRIVATE ASTRA_GUI_SUBSYSTEM)
 
+            # Ship-friendly names: the packaging script, docs and shortcuts all use these.
+            set_target_properties(astra_studio PROPERTIES OUTPUT_NAME "AstraStudio")
+            set_target_properties(astra_keyforge PROPERTIES OUTPUT_NAME "AstraKeyForge")
+
             foreach(target astra_studio astra_keyforge)
                 add_custom_command(TARGET ${target} POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy_directory

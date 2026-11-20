@@ -2,6 +2,14 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <string_view>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 #include "astra/core/FileIO.h"
 
@@ -71,7 +79,10 @@ std::string ExecutableDir() {
     wchar_t buffer[4096];
     const unsigned long len = GetModuleFileNameW(nullptr, buffer, 4096);
     if (len > 0) {
-        return stdfs::u8path(std::wstring(buffer, len)).parent_path().u8string();
+        // Build the path from the wide string directly: u8path's wide-char factory is
+        // deprecated ([depr.fs.path.factory]/1) and MSVC's STL rejects it outright.
+        const stdfs::path exe(std::wstring_view(buffer, static_cast<std::size_t>(len)));
+        return exe.parent_path().u8string();
     }
     return {};
 #else

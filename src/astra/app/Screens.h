@@ -2,6 +2,8 @@
 #pragma once
 
 #include "astra/app/AstraApp.h"
+#include <string>
+#include <vector>
 
 namespace astra::app {
 

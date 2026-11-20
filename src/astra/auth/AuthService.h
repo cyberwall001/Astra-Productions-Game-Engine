@@ -5,6 +5,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <string_view>
 
 #include "astra/auth/Account.h"
 #include "astra/auth/Session.h"
