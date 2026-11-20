@@ -68,7 +68,17 @@ jobs:
           Set-Content CMakeLists.txt -Value $raw -NoNewline
 
       - name: Configure
-        run: cmake --preset windows-msvc
+        shell: pwsh
+        run: |
+          $lines = & cmake --preset windows-msvc 2>&1 | ForEach-Object { "$_" }
+          $code = $LASTEXITCODE
+          $lines | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            $tail = (($lines | Select-Object -Last 25) -join "`n")
+            $tail = $tail.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Host "::error title=cmake configure failed::$tail"
+            exit 1
+          }
 
       - name: Build
         run: cmake --build --preset windows-msvc-release
