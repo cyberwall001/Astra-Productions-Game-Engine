@@ -30,17 +30,6 @@ float& Anim(ImGuiID id, float initial = 0.0f) {
     return *ImGui::GetStateStorage()->GetFloatRef(id, initial);
 }
 
-ImVec2 TextCenter(const ImRect& bb, const char* text) {
-    const ImVec2 size = ImGui::CalcTextSize(text);
-    return ImVec2(bb.Min.x + (bb.GetWidth() - size.x) * 0.5f,
-                  bb.Min.y + (bb.GetHeight() - size.y) * 0.5f);
-}
-
-void DrawTextAligned(ImDrawList* dl, ImFont* font, ImU32 color, ImVec2 pos, const char* text) {
-    FontScope scope(font);
-    dl->AddText(pos, color, text);
-}
-
 // Shared button renderer.
 bool DrawButton(const char* id, const char* label, ImVec2 size, ImU32 base, ImU32 hover,
                 ImU32 pressed, ImU32 textColor, bool bordered, bool enabled, Icon icon,
@@ -436,7 +425,6 @@ bool TextField(const char* id, std::string& value, const char* placeholder, Icon
 
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     const float w = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 size(w, U(height));
     const ImGuiID wid = window->GetID(id);
 
@@ -497,7 +485,6 @@ bool PasswordField(const char* id, std::string& value, bool& reveal, const char*
     const float height = 44.0f;
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     const float w = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 size(w, U(height));
     const ImGuiID wid = window->GetID(id);
     const float padLeft = U(42.0f);
@@ -562,7 +549,6 @@ bool SearchField(const char* id, std::string& value, float width, const char* pl
     const float height = 36.0f;
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     const float w = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 size(w, U(height));
     const ImGuiID wid = window->GetID(id);
     const float padLeft = U(36.0f);
@@ -868,7 +854,6 @@ bool CodeEntry(const char* id, std::string& value, bool error, float width) {
     const float height = 58.0f;
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     const float w = width > 0.0f ? width : ImGui::GetContentRegionAvail().x;
-    const ImVec2 pos = ImGui::GetCursorScreenPos();
     const ImVec2 size(w, U(height));
     const ImGuiID wid = window->GetID(id);
 

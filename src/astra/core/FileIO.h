@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <string_view>
 
 namespace astra::fs {
 

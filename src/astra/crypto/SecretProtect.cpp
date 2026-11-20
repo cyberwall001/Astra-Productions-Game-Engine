@@ -4,6 +4,9 @@
 #include "astra/crypto/Encoding.h"
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <dpapi.h>
 #pragma comment(lib, "crypt32.lib")

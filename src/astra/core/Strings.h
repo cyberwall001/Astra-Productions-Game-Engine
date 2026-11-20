@@ -3,6 +3,8 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
+#include <string_view>
 
 namespace astra::str {
 

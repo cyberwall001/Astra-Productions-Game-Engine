@@ -2,6 +2,9 @@
 #include "astra/platform/Application.h"
 
 #if defined(_WIN32) && defined(ASTRA_GUI_SUBSYSTEM)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     return astra::platform::RunStudioWindow();

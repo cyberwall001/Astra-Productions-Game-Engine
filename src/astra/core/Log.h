@@ -5,6 +5,9 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <cstdint>
+#include <utility>
+#include <string_view>
 
 namespace astra::log {
 

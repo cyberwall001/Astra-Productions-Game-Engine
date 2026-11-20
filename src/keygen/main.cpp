@@ -173,6 +173,9 @@ int RunCli(int argc, char** argv) {
 #if defined(_WIN32) && defined(ASTRA_GUI_SUBSYSTEM)
 
 #include <shellapi.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {

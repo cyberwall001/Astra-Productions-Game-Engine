@@ -11,6 +11,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <utility>
 
 #include "astra/github/GitHubModels.h"
 #include "astra/github/ITransport.h"
