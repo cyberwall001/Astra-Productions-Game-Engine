@@ -1,6 +1,8 @@
 // Single translation unit that compiles the stb_image decoder.
 #define STB_IMAGE_IMPLEMENTATION
+#ifndef STBI_NO_STDIO
 #define STBI_NO_STDIO
+#endif
 #define STBI_NO_HDR
 #define STBI_NO_PIC
 #define STBI_NO_PNM

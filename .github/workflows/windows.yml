@@ -81,8 +81,8 @@ jobs:
       - name: Build
         run: |
           set -o pipefail
-          cmake --build --preset headless 2>&1 | tee build.log
-          status=${PIPESTATUS[0]}
+          status=0
+          cmake --build --preset headless 2>&1 | tee build.log || status=$?
           if [ $status -ne 0 ]; then
             message=$(tail -n 30 build.log | sed 's/%/%25/g' | awk 'BEGIN{ORS="%0A"} {print}')
             echo "::error title=linux build failed::$message"
