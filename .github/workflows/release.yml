@@ -83,7 +83,17 @@ jobs:
           }
 
       - name: Build
-        run: cmake --build --preset windows-msvc-release
+        shell: pwsh
+        run: |
+          $lines = & cmake --build --preset windows-msvc-release 2>&1 | ForEach-Object { "$_" }
+          $code = $LASTEXITCODE
+          $lines | ForEach-Object { Write-Host $_ }
+          if ($code -ne 0) {
+            $tail = (($lines | Select-Object -Last 30) -join "`n")
+            $tail = $tail.Replace('%', '%25').Replace("`r", '').Replace("`n", '%0A')
+            Write-Host "::error title=windows build failed::$tail"
+            exit 1
+          }
 
       - name: Unit + UI smoke tests
         run: ctest --preset windows-msvc
