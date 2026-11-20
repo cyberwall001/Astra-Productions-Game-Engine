@@ -1,0 +1,115 @@
+name: Release
+
+# Every merge to main publishes a GitHub release. The version line stays below 1.0.0:
+# the first run after a merge reuses the version in CMakeLists.txt, later runs bump the
+# patch number and commit that bump back to main (tagged, and marked [skip ci] so the
+# bump commit does not trigger another build/release cycle).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, tag and publish
+    if: ${{ github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip release]') }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          $content = Get-Content CMakeLists.txt -Raw
+          $match = [regex]::Match($content, '(?m)^\s*VERSION\s+(\d+)\.(\d+)\.(\d+)\s*$')
+          if (-not $match.Success) { throw 'Could not read the project version from CMakeLists.txt' }
+
+          $current = "$($match.Groups[1].Value).$($match.Groups[2].Value).$($match.Groups[3].Value)"
+
+          git fetch --tags --force
+          $existing = git tag --list 'v0.*'
+
+          $version = $current
+          if ($existing -contains "v$current") {
+            $patch = [int]$match.Groups[3].Value + 1
+            $version = "$($match.Groups[1].Value).$($match.Groups[2].Value).$patch"
+          }
+
+          $parts = $version.Split('.')
+          if ([int]$parts[0] -ge 1) {
+            throw "Refusing to release $version - this project stays below 1.0.0 until the runtime ships."
+          }
+
+          "version=$version"     >> $env:GITHUB_OUTPUT
+          "previous=$current"    >> $env:GITHUB_OUTPUT
+          "changed=$($version -ne $current)" >> $env:GITHUB_OUTPUT
+          Write-Host "Releasing v$version (CMakeLists.txt says $current)"
+
+      - name: Bump the version in the working tree
+        if: steps.version.outputs.changed == 'true'
+        shell: pwsh
+        run: |
+          $old = '${{ steps.version.outputs.previous }}'
+          $new = '${{ steps.version.outputs.version }}'
+          $raw = Get-Content CMakeLists.txt -Raw
+          # cmake_minimum_required(VERSION 3.20) cannot collide with "VERSION 0.x.y".
+          $raw = $raw.Replace("VERSION $old", "VERSION $new")
+          Set-Content CMakeLists.txt -Value $raw -NoNewline
+
+      - name: Configure
+        run: cmake --preset windows-msvc
+
+      - name: Build
+        run: cmake --build --preset windows-msvc-release
+
+      - name: Unit + UI smoke tests
+        run: ctest --preset windows-msvc
+
+      - name: Package
+        shell: pwsh
+        run: ./tools/package_windows.ps1 -Configuration Release
+
+      - name: Commit the bump, tag it and publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = '${{ steps.version.outputs.version }}'
+
+          git config user.name  'astra-release-bot'
+          git config user.email 'astra-release-bot@users.noreply.github.com'
+
+          if ('${{ steps.version.outputs.changed }}' -eq 'true') {
+            git add CMakeLists.txt
+            git commit -m "chore(release): v$version [skip release] [skip ci]"
+            git push origin HEAD:main
+          }
+
+          git tag -a "v$version" -m "Astra Studio v$version"
+          git push origin "v$version"
+
+          $zip = (Get-ChildItem dist/astra-studio-*-windows-x64.zip | Select-Object -First 1).FullName
+          gh release create "v$version" $zip `
+            --title "Astra Studio v$version" `
+            --generate-notes `
+            --latest
+
+      - name: Keep the release notes on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-failure-logs
+          path: build/windows-msvc/Testing/**
+          if-no-files-found: ignore

@@ -1,0 +1,24 @@
+# Build output
+/build/
+/build-*/
+/out/
+/install/
+CMakeUserPresets.json
+
+# Visual Studio / IDEs
+.vs/
+.vscode/
+*.user
+*.suo
+*.VC.db
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Runtime state (never committed - these live in the engine data folder)
+*.tmp
+.log
+
+# Local preview captures
+docs/screenshots/_scratch/
