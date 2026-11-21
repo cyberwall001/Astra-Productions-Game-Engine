@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(AstraStudio
-    VERSION 0.1.2
+    VERSION 0.1.3
     DESCRIPTION "Astra Engine - general-purpose game engine and studio"
     LANGUAGES CXX)
 
