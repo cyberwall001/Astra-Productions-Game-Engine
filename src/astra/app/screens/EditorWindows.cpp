@@ -108,7 +108,7 @@ void RenderPanel(AstraApp& app) {
     if (!app.editor.showRenderPanel) return;
     auto& traceState = app.editor.trace;
 
-    ImGui::SetNextWindowSize(ImVec2(U(470.0f), U(620.0f)), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(U(486.0f), U(648.0f)), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->Size.x * 0.5f - U(235.0f), U(96.0f)),
                             ImGuiCond_FirstUseEver);
     bool open = true;
@@ -129,7 +129,7 @@ void RenderPanel(AstraApp& app) {
     const float fieldX = left + U(150.0f);
 
     float y = top;
-    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textFaint,
+    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textDim,
                 "OFFLINE RENDER");
     y += U(18.0f);
     dl->AddText(Text().small, Text().small->FontSize, ImVec2(left, y), Colors().textDim,
@@ -260,8 +260,8 @@ void RenderPanel(AstraApp& app) {
 
 void WorldSettings(AstraApp& app) {
     if (!app.editor.showWorldSettings) return;
-    ImGui::SetNextWindowSize(ImVec2(U(340.0f), U(470.0f)), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->Size.x - U(372.0f), U(96.0f)),
+    ImGui::SetNextWindowSize(ImVec2(U(352.0f), U(600.0f)), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->Size.x - U(392.0f), U(84.0f)),
                             ImGuiCond_FirstUseEver);
     bool open = true;
     if (!ImGui::Begin("World Settings", &open)) {
@@ -345,7 +345,7 @@ void WorldSettings(AstraApp& app) {
 
     dl->AddLine(ImVec2(left, y), ImVec2(left + contentWidth, y), Colors().stroke, U(1.0f));
     y += U(10.0f);
-    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textFaint, "VIEWPORT");
+    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textDim, "VIEWPORT");
     y += U(20.0f);
     CheckboxAt("Shadows", &app.editor.viewport.showShadows, ImVec2(left, y));
     CheckboxAt("Volumetrics", &app.editor.viewport.showVolumetrics, ImVec2(left + U(150.0f), y));
@@ -356,7 +356,7 @@ void WorldSettings(AstraApp& app) {
 
     dl->AddLine(ImVec2(left, y), ImVec2(left + contentWidth, y), Colors().stroke, U(1.0f));
     y += U(10.0f);
-    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textFaint, "RENDERING");
+    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textDim, "RENDERING");
     y += U(20.0f);
     ImGui::SetCursorScreenPos(ImVec2(left, y));
     if (ui::SecondaryButton("Open path tracer", ImVec2(contentWidth, U(30.0f)), true, ui::Icon::Play)) {
@@ -369,7 +369,7 @@ void WorldSettings(AstraApp& app) {
 
     dl->AddLine(ImVec2(left, y), ImVec2(left + contentWidth, y), Colors().stroke, U(1.0f));
     y += U(10.0f);
-    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textFaint, "BLENDER");
+    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textDim, "BLENDER");
     y += U(20.0f);
     const int pending = static_cast<int>(asset::ScanInbox().size());
     dl->AddText(Text().small, Text().small->FontSize, ImVec2(left, y), Colors().textDim,

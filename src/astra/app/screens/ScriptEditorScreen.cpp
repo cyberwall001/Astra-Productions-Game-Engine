@@ -187,7 +187,10 @@ void DrawOutputColumn(AstraApp& app, ImVec2 pos, ImVec2 size) {
     ui::PushFont(Text().monoSmall);
     for (const auto& line : app.script.output) {
         ImGui::PushStyleColor(ImGuiCol_Text, ui::ToVec4(Colors().textDim));
-        ImGui::TextUnformatted(line.c_str());
+        // Console lines are clipped rather than wrapped: the output column is narrow and a
+        // half-wrapped path is harder to read than a shortened one.
+        ImGui::TextUnformatted(str::Ellipsis(line, 46).c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", line.c_str());
         ImGui::PopStyleColor();
     }
     if (!app.script.error.empty()) {

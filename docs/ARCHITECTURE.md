@@ -7,8 +7,9 @@ UI toolkit are written here. Dear ImGui is used only as an immediate-mode UI *dr
 library; every widget the user sees (fields, cards, segmented controls, steppers,
 sparklines, vector icons) is implemented in `src/astra/ui`.
 
-Milestone 1 ships the **studio shell**: launcher, accounts, project hub, editor layout.
-There is deliberately no game viewport yet — see [ROADMAP.md](ROADMAP.md).
+Milestone 1 shipped the **studio shell** (launcher, accounts, project hub, editor layout),
+milestone 2 the **level viewport**, and milestone 3 the **runtime view**: play-in-editor,
+AstraScript, an offline CPU path tracer and the Blender bridge. See [ROADMAP.md](ROADMAP.md).
 
 ## Layers
 
@@ -20,9 +21,16 @@ There is deliberately no game viewport yet — see [ROADMAP.md](ROADMAP.md).
 ├─────────────────────────────────────────────────────────────────────┤
 │ src/astra/app        AstraApp (launcher/editor flow), KeyForgeApp    │
 │ src/astra/app/screens  Boot, SignIn, Register, ProjectHub, Editor,   │
-│                        EditorPanels, Overlays                        │
+│                        EditorPanels, EditorWindows, ScriptEditor,    │
+│                        Overlays                                      │
 ├─────────────────────────────────────────────────────────────────────┤
 │ src/astra/ui         Theme, Icons, Widgets, Branding                 │
+├─────────────────────────────────────────────────────────────────────┤
+│ src/astra/script     AstraScript tokenizer, parser, interpreter, host │
+│ src/astra/render     orbit camera, CPU rasteriser, picking, tracer   │
+│ src/astra/asset      mesh builders, OBJ import, Blender bridge inbox │
+│ src/astra/image      CPU image buffers, noise, blur, PNG IO          │
+│ src/astra/game       first-person pawn (play in editor)              │
 ├─────────────────────────────────────────────────────────────────────┤
 │ src/astra/scene      entities, components, storm presets, reflection │
 │ src/astra/project    astra.project.json, scene IO, recent projects   │
@@ -44,8 +52,11 @@ about GitHub; `app` orchestrates.
 * GitHub fetches run on one worker thread (`github::RepoFetcher`). Results are published
   as an immutable `RepoSnapshot` and collected by `Poll()` on the UI thread, so no lock is
   ever held while drawing.
-* There is no other concurrency. It is a deliberate constraint for milestone 1: the
-  renderer and the asset pipeline will introduce their own job system later.
+* The path tracer splits scanlines across `std::thread` workers (hardware-concurrency, capped)
+  and returns a finished `image::Buffer`; nothing in the renderer touches scene state while
+  tracing, so a trace can never tear the level.
+* Nothing else is concurrent. The rasteriser stays single-threaded on purpose: every frame is
+  drawn into the ImGui draw list, which is not thread-safe.
 
 ## Data on disk
 
@@ -64,6 +75,10 @@ Everything lives under `%LOCALAPPDATA%\Astra Productions\` (override with
 | `keyforge/owner.json` | KeyForge owner passphrase (salt + PBKDF2 hash) — owner tool only |
 | `keyforge/issued_codes.json` | the issue ledger |
 | `keyforge/exports/` | batch exports (`codes-<stamp>.txt` / `.json`) |
+| `engine/bridge/inbox/` | OBJ + JSON jobs written by the Blender addon |
+| `engine/bridge/imported/` | jobs already imported (move-aside, never re-imported) |
+| `engine/bridge/status.json` | Blender heartbeat: version, scene name, timestamp |
+| `engine/renders/` | path-traced stills saved from the Render panel |
 
 A project folder always contains `astra.project.json`, `scenes/`, `assets/`, `content/`.
 New projects open on the **storm template**: `Chase Environment → {Chase Cam, Key Light,

@@ -52,6 +52,8 @@ integer). Operators: `+ - * / %`, comparisons, `&& || !`. Strings support `\n`, 
 | Math | `floor`, `ceil`, `round`, `abs`, `min`, `max`, `sqrt`, `pow`, `sin`, `cos`, `tan`, `clamp`, `lerp`, `random`, `PI`, `TAU` |
 | Strings | `join(array, sep)`, `upper`, `lower`, `substr`, `trim`, `split(text, sep)` |
 | Scene | `actorCount()`, `actorName(id)`, `findActor(name)`, `spawnActor(name, shape, x, y, z)`, `destroyActor(id)`, `getPosition(id)`, `setPosition`, `setRotation`, `setScale`, `setColor`, `getTag`, `setTag`, `setMaterial(id, shader, r, g, b)` |
+| Presets | `setParticles(actor, preset, rate)`, `particlePresets()`, `setMaterial(actor, shader, roughness, metallic, emissive)` (names are case-insensitive: `Fire`, `Hologram`, …) |
+| Bridge | `blenderImport()` — pulls everything waiting in the Blender inbox, returns how many actors appeared |
 | Mesh | `meshCube()`, `meshSphere(segments, rings)`, `meshCylinder(segments)`, `meshCone(segments)`, `meshPlane(divisions)`, `meshTorus(...)`, `meshVertex(mesh, x, y, z)`, `meshTriangle(mesh, a, b, c)`, `meshRecenter(mesh)`, `meshFitUnit(mesh)`, `meshRegister(mesh, name)` → `meshId`, `attachMesh(actor, meshId)`, `meshCount()` |
 | Image | `imageNew(w, h)`, `imageWidth`, `imageHeight`, `imageFill`, `imageSet`, `imageGet`, `imageRect`, `imageCircle`, `imageLine`, `imageGradient`, `imageChecker`, `imageNoise`, `imageBlur`, `imageGamma`, `imageSave(img, path)`, `imageLoad(path)` |
 | IO | `readFile(path)`, `writeFile(path, text)`, `fileExists(path)` |

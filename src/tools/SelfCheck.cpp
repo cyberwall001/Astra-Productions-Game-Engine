@@ -656,6 +656,29 @@ void TestPresets() {
         CHECK(particles.startSize > 0.0f);
     }
 
+    // Scripts can drive the same presets and the Blender inbox.
+    {
+        astra::scene::Scene scripted = astra::scene::Scene::CreateSampleLevel("script presets");
+        astra::script::Host host(scripted);
+        const astra::script::ScriptRun run = host.Run(
+            "let names = particlePresets()\n"
+            "print(\"presets:\", len(names))\n"
+            "let a = spawnActor(\"FX\", \"cube\", 3.0, 1.0, 0.0)\n"
+            "setParticles(a, \"Fire\", 40.0)\n"
+            "setMaterial(a, \"Hologram\", 0.2, 0.9, 0.0)\n",
+            "presets.astra");
+        CHECK(run.result.ok);
+        if (!run.result.ok) std::fprintf(stderr, "  script: %s\n", run.result.error.c_str());
+        const astra::scene::Entity* fx = scripted.FindByName("FX");
+        CHECK(fx != nullptr);
+        if (fx) {
+            CHECK(fx->Has(astra::scene::Component::Particles));
+            CHECK(fx->particles.preset == astra::scene::ParticlePreset::Fire);
+            CHECK(std::abs(fx->particles.rate - 40.0f) < 0.01f);
+            CHECK(fx->material.shader == astra::scene::MaterialShader::Hologram);
+        }
+    }
+
     // The mesh library survives a JSON round-trip with materials and particles attached.
     astra::scene::Scene installed;
     installed.SetName("presets");

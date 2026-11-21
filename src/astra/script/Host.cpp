@@ -1,11 +1,13 @@
 #include "astra/script/Host.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <random>
 
+#include "astra/asset/Bridge.h"
 #include "astra/asset/MeshBuilder.h"
 #include "astra/core/FileIO.h"
 #include "astra/core/Strings.h"
@@ -96,9 +98,27 @@ const std::vector<std::string>& ScriptableShaders() {
     return shaders;
 }
 
+// Canonical preset names, straight from the scene layer so scripts can never drift from the UI.
 const std::vector<std::string>& ScriptableParticles() {
-    static const std::vector<std::string> presets = {"smoke", "sparks", "rain", "dust", "fire"};
+    static const std::vector<std::string> presets = [] {
+        std::vector<std::string> names;
+        int count = 0;
+        const char* const* list = scene::ParticlePresetNames(count);
+        for (int i = 0; i < count; ++i) names.emplace_back(list[i]);
+        return names;
+    }();
     return presets;
+}
+
+bool EqualsIgnoreCase(const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i])) !=
+            std::tolower(static_cast<unsigned char>(b[i]))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 Host::Host(scene::Scene& scene) : scene_(scene) {}
@@ -464,6 +484,19 @@ void Host::Install(Interpreter& interpreter) {
         const Entity* entity = scene_.Find(static_cast<EntityId>(Integer(Arg(a, 0), "color")));
         return MakeColor(entity ? entity->mesh.baseColor : Vec3());
     });
+    define("particlePresets", [](Interpreter&, const std::vector<Value>&) {
+        int count = 0;
+        const char* const* names = scene::ParticlePresetNames(count);
+        Value list = Value::MakeArray();
+        for (int i = 0; i < count; ++i) list.array->items.push_back(Value(std::string(names[i])));
+        return list;
+    });
+    define("blenderImport", [this](Interpreter&, const std::vector<Value>&) {
+        // Pulls whatever the Blender addon left in the bridge inbox into the live level.
+        const int before = static_cast<int>(scene_.Count());
+        asset::ImportInbox(scene_, true);
+        return Value(static_cast<double>(scene_.Count() - before));
+    });
     define("setMaterial", [this](Interpreter&, const std::vector<Value>& a) {
         Entity* entity = scene_.Find(static_cast<EntityId>(Integer(Arg(a, 0), "setMaterial")));
         if (!entity) Error("setMaterial: no such actor");
@@ -471,7 +504,7 @@ void Host::Install(Interpreter& interpreter) {
         const std::string name = Text(Arg(a, 1), "setMaterial");
         const auto& shaders = ScriptableShaders();
         for (std::size_t i = 0; i < shaders.size(); ++i) {
-            if (shaders[i] == name) {
+            if (EqualsIgnoreCase(shaders[i], name)) {
                 entity->material.shader = static_cast<scene::MaterialShader>(i);
                 if (a.size() > 2) entity->material.roughness = static_cast<float>(Number(Arg(a, 2), "setMaterial"));
                 if (a.size() > 3) entity->material.metallic = static_cast<float>(Number(Arg(a, 3), "setMaterial"));
@@ -505,7 +538,7 @@ void Host::Install(Interpreter& interpreter) {
         const std::string name = Text(Arg(a, 1), "setParticles");
         const auto& presets = ScriptableParticles();
         for (std::size_t i = 0; i < presets.size(); ++i) {
-            if (presets[i] == name) {
+            if (EqualsIgnoreCase(presets[i], name)) {
                 entity->particles.preset = static_cast<scene::ParticlePreset>(i);
                 scene::ApplyParticlePreset(entity->particles);
                 if (a.size() > 2) entity->particles.rate = static_cast<float>(Number(Arg(a, 2), "setParticles"));
