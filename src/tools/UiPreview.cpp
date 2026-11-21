@@ -461,8 +461,13 @@ void ShotRenderPanel(astra::app::AstraApp& app) {
     app.editor.showRenderPanel = true;
     app.editor.trace.width = 320;
     app.editor.trace.height = 180;
-    app.editor.trace.samples = 12;
-    app.editor.trace.maxBounces = 2;
+    app.editor.trace.samples = 64;
+    app.editor.trace.maxBounces = 3;
+    // Frame the whole level so the still reads like a render, not a close-up.
+    app.editor.viewportCamera.target = astra::scene::Vec3(0.0f, 1.0f, 0.0f);
+    app.editor.viewportCamera.distance = 13.0f;
+    app.editor.viewportCamera.yawDeg = 24.0f;
+    app.editor.viewportCamera.pitchDeg = 16.0f;
     for (int i = 0; i < 2; ++i) RenderFrame([&] { app.Draw(); });
 
     // Drive the real command rather than calling the tracer directly.

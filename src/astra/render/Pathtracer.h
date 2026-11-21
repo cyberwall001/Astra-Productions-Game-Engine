@@ -27,7 +27,7 @@ enum class TraceBackend { Cpu = 0, Gpu };
 struct TraceSettings {
     int width = 480;
     int height = 270;
-    int samples = 24;          // paths per pixel
+    int samples = 48;          // paths per pixel (noise falls as 1/sqrt(samples))
     int maxBounces = 3;        // 0 = direct light only
     float exposure = 1.05f;
     float sunAngularRadiusDeg = 1.2f;  // soft sun disk for soft shadows

@@ -238,7 +238,10 @@ void RenderPanel(AstraApp& app) {
     }
 
     const ImVec2 previewPos(left, y);
-    const ImVec2 previewSize(contentWidth, std::max(U(90.0f), top + ImGui::GetWindowHeight() - y - U(52.0f)));
+    // Stay inside the window: the preview fills whatever is left after the controls.
+    const float bottomEdge = ImGui::GetWindowPos().y + ImGui::GetWindowSize().y -
+                             ImGui::GetStyle().WindowPadding.y;
+    const ImVec2 previewSize(contentWidth, std::max(U(88.0f), bottomEdge - y - U(6.0f)));
     ImGui::SetCursorScreenPos(previewPos);
     ImGui::InvisibleButton("##trace_preview", previewSize);
     if (!app.editor.traceImage.Empty()) {

@@ -97,6 +97,25 @@ bool Slab(const Vec3& min, const Vec3& max, const Vec3& origin, const Vec3& inve
     return tmax >= std::max(0.0f, tmin) && tmin < maxDistance;
 }
 
+// Cosine-weighted hemisphere sample around `normal`, using an orthonormal basis. Doing this
+// properly matters: normalising (normal + randomVector) explodes when the two nearly cancel,
+// which shows up as speckle that no amount of blur or extra samples removes.
+Vec3 CosineHemisphere(const Vec3& normal, Rng& rng) {
+    const float u1 = rng.Float();
+    const float u2 = rng.Float();
+    const float radius = std::sqrt(u1);
+    const float theta = 2.0f * kPi * u2;
+    const float x = radius * std::cos(theta);
+    const float y = radius * std::sin(theta);
+    const float z = std::sqrt(std::max(0.0f, 1.0f - u1));
+
+    // Build a basis that never degenerates, even for axis-aligned normals.
+    const Vec3 up = std::fabs(normal.y) < 0.9f ? Vec3(0.0f, 1.0f, 0.0f) : Vec3(1.0f, 0.0f, 0.0f);
+    const Vec3 tangent = VNormalize(VCross(up, normal));
+    const Vec3 bitangent = VCross(normal, tangent);
+    return VNormalize(VAdd(VMul(normal, z), VAdd(VMul(tangent, x), VMul(bitangent, y))));
+}
+
 }  // namespace
 
 void TraceScene::Build(const scene::Scene& scene) {
@@ -468,16 +487,18 @@ image::Buffer Render(const TraceScene& scene, const Camera& camera, const TraceS
                             // Ambient: hemisphere sky light, optionally with a short AO ray.
                             float occlusion = 1.0f;
                             if (settings.ambientOcclusion) {
+                                // Four hemisphere probes with a gentler per-hit weight: two
+                                // probes left visible speckle on large flat surfaces.
                                 int blocked = 0;
-                                for (int ao = 0; ao < 2; ++ao) {
-                                    Vec3 dir = rng.UnitSphere();
-                                    if (VDot(dir, hit.normal) < 0.0f) dir = VMul(dir, -1.0f);
-                                    if (scene.Occluded(VAdd(hit.position, VMul(hit.normal, kEpsilon * 4.0f)),
-                                                       VNormalize(dir), 2.5f)) {
+                                const float aoRadius = 2.5f;
+                                for (int ao = 0; ao < 4; ++ao) {
+                                    const Vec3 dir = CosineHemisphere(hit.normal, rng);
+                                    if (scene.Occluded(VAdd(hit.position, VMul(hit.normal, kEpsilon * 8.0f)),
+                                                       dir, aoRadius)) {
                                         ++blocked;
                                     }
                                 }
-                                occlusion = 1.0f - static_cast<float>(blocked) * 0.35f;
+                                occlusion = 1.0f - static_cast<float>(blocked) * 0.17f;
                             }
                             // Sky dome irradiance, also with the diffuse 1/pi factor and a
                             // little extra weight so shadowed sides still read as lit.
@@ -497,17 +518,17 @@ image::Buffer Render(const TraceScene& scene, const Camera& camera, const TraceS
                                 nextDirection = VNormalize(VAdd(reflected, VMul(rng.UnitSphere(), jitter)));
                                 throughput = VMulVec(throughput, hit.albedo);
                             } else {
-                                Vec3 dir = rng.UnitSphere();
-                                if (VDot(dir, hit.normal) < 0.0f) dir = VMul(dir, -1.0f);
-                                nextDirection = VNormalize(VAdd(hit.normal, dir));
+                                nextDirection = CosineHemisphere(hit.normal, rng);
                                 throughput = VMulVec(throughput, hit.albedo);
                             }
                             origin = VAdd(hit.position, VMul(hit.normal, kEpsilon * 6.0f));
                             rayDirection = nextDirection;
                             bounced = true;
 
-                            // Russian roulette keeps long paths from dominating the cost.
-                            if (bounce >= 1) {
+                            // Russian roulette keeps long paths from dominating the cost. It only
+                            // starts at the third bounce: killing paths earlier adds variance
+                            // to the first indirect bounce, which is most of the visible image.
+                            if (bounce >= 2) {
                                 const float survival = std::min(0.9f, std::max(0.15f, VLength(throughput)));
                                 if (rng.Float() > survival) break;
                                 throughput = VMul(throughput, 1.0f / survival);
@@ -543,7 +564,10 @@ image::Buffer Render(const TraceScene& scene, const Camera& camera, const TraceS
     for (auto& worker : workers) worker.join();
 
     if (settings.denoise) {
-        buffer.BoxBlur(1);
+        // Low sample counts need a wider kernel; high ones only need a seam-remover, and a
+        // wide blur there would eat real detail.
+        const int radius = settings.samples < 64 ? 2 : 1;
+        buffer.BoxBlur(radius);
     }
 
     if (stats) {
