@@ -485,6 +485,85 @@ void Inspector(AstraApp& app, ImVec2 pos, ImVec2 size) {
         ImGui::PopID();
     }
 
+    // ---- presets ----------------------------------------------------------
+    // Applying a preset rewrites the whole component, so it is a single undoable command.
+    const float presetWidth = ImGui::GetContentRegionAvail().x;
+    if (entity->Has(scene::Component::Material)) {
+        ui::Divider(0.5f, U(4.0f), U(4.0f));
+        ui::Overline("MATERIAL PRESET");
+        int count = 0;
+        const char* const* names = scene::MaterialShaderNames(count);
+        const char* current = scene::MaterialShaderName(entity->material.shader);
+        ImGui::SetNextItemWidth(presetWidth - U(6.0f));
+        if (ImGui::BeginCombo("##material_preset", current)) {
+            for (int i = 0; i < count; ++i) {
+                if (ImGui::Selectable(names[i], entity->material.shader ==
+                                                    static_cast<scene::MaterialShader>(i))) {
+                    app.PushUndo(std::string("material ") + names[i]);
+                    entity->material.shader = static_cast<scene::MaterialShader>(i);
+                    if (entity->material.shader == scene::MaterialShader::Hologram) {
+                        entity->material.emissive = 0.9f;
+                        entity->material.opacity = 0.72f;
+                    } else if (entity->material.shader == scene::MaterialShader::Emissive) {
+                        entity->material.emissive = 1.0f;
+                    }
+                    scene.MarkDirty();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ui::VSpace(U(4.0f));
+    }
+    if (entity->Has(scene::Component::Particles)) {
+        ui::Overline("PARTICLE PRESET");
+        int count = 0;
+        const char* const* names = scene::ParticlePresetNames(count);
+        ImGui::SetNextItemWidth(presetWidth - U(6.0f));
+        if (ImGui::BeginCombo("##particle_preset", scene::ParticlePresetName(entity->particles.preset))) {
+            for (int i = 0; i < count; ++i) {
+                if (ImGui::Selectable(names[i], static_cast<int>(entity->particles.preset) == i)) {
+                    app.PushUndo(std::string("particles ") + names[i]);
+                    entity->particles.preset = static_cast<scene::ParticlePreset>(i);
+                    scene::ApplyParticlePreset(entity->particles);
+                    scene.MarkDirty();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ui::VSpace(U(4.0f));
+    }
+    if (entity->Has(scene::Component::Mesh) && !scene.Meshes().empty()) {
+        ui::Overline("MESH LIBRARY");
+        const auto& meshes = scene.Meshes();
+        const std::string current = entity->mesh.shape == scene::MeshShape::Custom &&
+                                            entity->mesh.meshId >= 1 &&
+                                            entity->mesh.meshId <= meshes.size()
+                                        ? meshes[entity->mesh.meshId - 1].name
+                                        : "(primitive)";
+        ImGui::SetNextItemWidth(presetWidth - U(6.0f));
+        if (ImGui::BeginCombo("##mesh_library", current.c_str())) {
+            const bool primitiveSelected = entity->mesh.shape != scene::MeshShape::Custom;
+            if (ImGui::Selectable("(primitive)", primitiveSelected)) {
+                app.PushUndo("mesh primitive");
+                entity->mesh.shape = scene::MeshShape::Cube;
+                entity->mesh.meshId = 0;
+                scene.MarkDirty();
+            }
+            for (std::size_t i = 0; i < meshes.size(); ++i) {
+                const bool selected = entity->mesh.shape == scene::MeshShape::Custom &&
+                                      entity->mesh.meshId == i + 1;
+                if (ImGui::Selectable(meshes[i].name.c_str(), selected)) {
+                    app.PushUndo("mesh " + meshes[i].name);
+                    entity->mesh.shape = scene::MeshShape::Custom;
+                    entity->mesh.meshId = static_cast<u32>(i + 1);
+                    scene.MarkDirty();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ui::VSpace(U(4.0f));
+    }
+
     ui::VSpace(6.0f);
     ImGui::PushStyleColor(ImGuiCol_Header, ui::ToVec4(Colors().surfaceSunken));
     if (ImGui::Button("+ Add component", ImVec2(ImGui::GetContentRegionAvail().x, U(30.0f)))) {
@@ -494,6 +573,7 @@ void Inspector(AstraApp& app, ImVec2 pos, ImVec2 size) {
     if (ImGui::BeginPopup("##add_component")) {
         if (ImGui::MenuItem("Static mesh", nullptr, false,
                             !entity->Has(scene::Component::Mesh))) {
+            app.PushUndo("add mesh component");
             scene.AddComponent(entity->id, scene::Component::Mesh);
         }
         if (ImGui::MenuItem("Light", nullptr, false, !entity->Has(scene::Component::Light))) {
@@ -560,10 +640,23 @@ void Viewport(AstraApp& app, ImVec2 pos, ImVec2 size) {
     app.editor.viewportMaxX = bodyMax.x;
     app.editor.viewportMaxY = bodyMax.y;
 
+    // Play-in-editor: the viewport looks through the possessed pawn, and the editor camera is
+    // parked so WASD never fights the mouse-look controls.
+    const bool possessed = app.editor.playing && app.editor.playPossessCamera;
+    const render::Camera viewCamera =
+        possessed ? app.editor.player.ViewCamera() : app.editor.viewportCamera;
+
+    // Play mode hides editor chrome (gizmos, actor icons) exactly like a standalone build.
+    render::Options drawOptions = app.editor.viewport;
+    if (app.editor.playing) {
+        drawOptions.showGizmos = false;
+        drawOptions.showActorIcons = false;
+    }
+
     dl->PushClipRect(bodyMin, bodyMax, true);
     app.editor.viewportStats =
-        render::Draw(dl, bodyRect, app.editor.scene, app.editor.viewportCamera, app.editor.viewport,
-                     app.editor.selected, app.time);
+        render::Draw(dl, bodyRect, app.editor.scene, viewCamera, drawOptions,
+                     app.editor.playing ? scene::kInvalidEntity : app.editor.selected, app.time);
     dl->PopClipRect();
 
     // Input surface. Everything below draws on top of it, so the overlays win the hover test.
@@ -578,8 +671,12 @@ void Viewport(AstraApp& app, ImVec2 pos, ImVec2 size) {
     ImGuiIO& io = ImGui::GetIO();
     render::Camera& camera = app.editor.viewportCamera;
 
-    if (hovered && io.MouseWheel != 0.0f) camera.Zoom(io.MouseWheel);
-    if (active) {
+    if (possessed) {
+        // No editor navigation while playing; the pawn owns the view.
+    } else if (hovered && io.MouseWheel != 0.0f) {
+        camera.Zoom(io.MouseWheel);
+    }
+    if (active && !possessed) {
         // Unreal bindings: right drag looks around, middle drag pans, Alt+left does both
         // for trackpads that have no middle button.
         const bool orbit = ImGui::IsMouseDragging(ImGuiMouseButton_Right) ||
@@ -591,7 +688,7 @@ void Viewport(AstraApp& app, ImVec2 pos, ImVec2 size) {
         }
     }
 
-    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    if (hovered && !possessed && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         gViewportPressPos = io.MousePos;
         gViewportPressed = true;
     }
@@ -613,6 +710,34 @@ void Viewport(AstraApp& app, ImVec2 pos, ImVec2 size) {
     if (hovered && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
         render::FrameSelection(camera, app.editor.scene, app.editor.selected);
         app.SetFooterStatus("Framed the view");
+    }
+
+    // ---- play HUD ----------------------------------------------------------
+    if (app.editor.playing) {
+        char hud[96];
+        std::snprintf(hud, sizeof(hud), "PLAYING  %02d:%02d",
+                      static_cast<int>(app.editor.playTime) / 60,
+                      static_cast<int>(app.editor.playTime) % 60);
+        const char* hint = "Esc to stop";
+        const ImVec2 pillCenter((bodyMin.x + bodyMax.x) * 0.5f, bodyMin.y + U(26.0f));
+        const float hudWidth =
+            Text().small->CalcTextSizeA(Text().small->FontSize, FLT_MAX, 0.0f, hud).x +
+            Text().tiny->CalcTextSizeA(Text().tiny->FontSize, FLT_MAX, 0.0f, hint).x + U(54.0f);
+        dl->AddRectFilled(ImVec2(pillCenter.x - hudWidth * 0.5f, bodyMin.y + U(10.0f)),
+                          ImVec2(pillCenter.x + hudWidth * 0.5f, bodyMin.y + U(42.0f)),
+                          ui::Fade(Colors().surfaceSunken, 0.9f), U(16.0f));
+        dl->AddRect(ImVec2(pillCenter.x - hudWidth * 0.5f, bodyMin.y + U(10.0f)),
+                    ImVec2(pillCenter.x + hudWidth * 0.5f, bodyMin.y + U(42.0f)),
+                    ui::Fade(Colors().brand, 0.65f), U(16.0f), 0, U(1.0f));
+        dl->AddText(Text().small, Text().small->FontSize,
+                    ImVec2(pillCenter.x - hudWidth * 0.5f + U(14.0f), bodyMin.y + U(18.0f)),
+                    Colors().brand, hud);
+        dl->AddText(Text().tiny, Text().tiny->FontSize,
+                    ImVec2(pillCenter.x + hudWidth * 0.5f - U(14.0f) -
+                               Text().tiny->CalcTextSizeA(Text().tiny->FontSize, FLT_MAX, 0.0f,
+                                                          hint).x,
+                           bodyMin.y + U(20.0f)),
+                    Colors().textFaint, hint);
     }
 
     // ---- overlay toolbar ---------------------------------------------------

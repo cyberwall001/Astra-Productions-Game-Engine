@@ -16,6 +16,7 @@ struct Options {
     bool showShadows = true;
     bool showGizmos = true;
     bool showActorIcons = true;
+    bool showVolumetrics = true;   // cloud deck + sun shafts + height fog veil
 };
 
 struct Stats {
@@ -23,6 +24,7 @@ struct Stats {
     int drawnActors = 0;
     int triangles = 0;
     int gridLines = 0;
+    int particles = 0;
     float milliseconds = 0.0f;
 };
 

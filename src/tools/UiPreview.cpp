@@ -416,6 +416,117 @@ void ShotEditor(astra::app::AstraApp& app) {
     app.editor.viewport.mode = astra::render::ViewMode::Shaded;
 }
 
+void KeyDown(ImGuiKey key, bool down) { ImGui::GetIO().AddKeyEvent(key, down); }
+
+void ShotPlay(astra::app::AstraApp& app) {
+    app.editor.showRenderPanel = false;
+    app.editor.showWorldSettings = false;
+    app.screen = astra::app::Screen::Editor;
+    app.transition = 1.0f;
+    if (astra::scene::Entity* entity = app.editor.scene.FindByName("Cube")) {
+        app.editor.selected = entity->id;
+    }
+    app.EnterPlay();
+    RenderFrame([&] { app.Draw(); });
+    Check(app.editor.playing, "play-in-editor started");
+    Check(app.editor.player.position.y > 0.0f, "player spawned above the floor");
+
+    const astra::scene::Vec3 start = app.editor.player.position;
+    KeyDown(ImGuiKey_W, true);
+    for (int i = 0; i < 24; ++i) RenderFrame([&] { app.Draw(); });
+    KeyDown(ImGuiKey_W, false);
+    RenderFrame([&] { app.Draw(); });
+    const float travelled = std::sqrt(
+        (app.editor.player.position.x - start.x) * (app.editor.player.position.x - start.x) +
+        (app.editor.player.position.z - start.z) * (app.editor.player.position.z - start.z));
+    Check(travelled > 0.5f, "W moved the possessed pawn forward");
+
+    KeyDown(ImGuiKey_Space, true);
+    RenderFrame([&] { app.Draw(); });
+    KeyDown(ImGuiKey_Space, false);
+    for (int i = 0; i < 4; ++i) RenderFrame([&] { app.Draw(); });
+    Check(app.editor.player.velocityY > 0.0f || app.editor.player.position.y > start.y,
+          "space made the pawn jump");
+    for (int i = 0; i < 10; ++i) RenderFrame([&] { app.Draw(); });
+    Save("14-play-in-editor");
+
+    app.ExitPlay();
+    RenderFrame([&] { app.Draw(); });
+    Check(!app.editor.playing, "stop ended the play session");
+}
+
+void ShotRenderPanel(astra::app::AstraApp& app) {
+    app.editor.showRenderPanel = true;
+    app.editor.trace.width = 320;
+    app.editor.trace.height = 180;
+    app.editor.trace.samples = 12;
+    app.editor.trace.maxBounces = 2;
+    for (int i = 0; i < 2; ++i) RenderFrame([&] { app.Draw(); });
+
+    // Drive the real command rather than calling the tracer directly.
+    astra::render::TraceScene baked;
+    baked.Build(app.editor.scene);
+    app.editor.traceImage =
+        astra::render::Render(baked, app.editor.viewportCamera, app.editor.trace,
+                              &app.editor.traceStats);
+    RenderFrame([&] { app.Draw(); });
+    Check(!app.editor.traceImage.Empty(), "path tracer produced an image");
+    Check(app.editor.traceStats.triangles > 100, "path tracer built a triangle soup");
+    Check(app.editor.traceStats.rays > 10000, "path tracer cast rays");
+    Save("15-render-panel");
+
+    const std::string saved = astra::paths::Join(gPreview.outputDir, "15-render-panel-raytraced.png");
+    Check(astra::render::RenderToFile(app.editor.scene, app.editor.viewportCamera, app.editor.trace,
+                                      saved, nullptr),
+          "render saved to PNG");
+    app.editor.showRenderPanel = false;
+}
+
+void ShotScriptEditor(astra::app::AstraApp& app) {
+    app.editor.showRenderPanel = false;
+    app.editor.showWorldSettings = false;
+    const std::string dir = astra::paths::Join(astra::paths::EngineDataDir(), "preview-scripts");
+    astra::fs::CreateDirectories(dir);
+    const std::string path = astra::paths::Join(dir, "level_tools.astra");
+    astra::fs::WriteTextFileAtomic(path, "print(\"preview\")\n");
+    app.OpenScriptEditor(dir, path, std::string());
+    RenderFrame([&] { app.Draw(); });
+    Check(app.screen == astra::app::Screen::ScriptEditor, "script editor screen opened");
+
+    app.script.source =
+        "// AstraScript preview\n"
+        "print(\"hello from AstraScript\")\n"
+        "let meshId = meshRegister(meshCylinder(16), \"Pillar\")\n"
+        "for (i in range(4)) {\n"
+        "    let actor = spawnActor(format(\"Pillar {}\", i), \"custom\", i * 2.0, 1.5, 0.0)\n"
+        "    attachMesh(actor, meshId)\n"
+        "    setScale(actor, 0.6, 2.4, 0.6)\n"
+        "}\n"
+        "let img = imageNew(96, 64)\n"
+        "imageGradient(img, 0.1, 0.4, 0.9, 0.2, 0.7, 1.0)\n"
+        "imageNoise(img, 0.08)\n"
+        "imageSave(img, \"preview.png\")\n"
+        "print(\"actors:\", actorCount())\n";
+    app.script.dirty = true;
+    RenderFrame([&] { app.Draw(); });
+
+    const int actorsBefore = static_cast<int>(app.editor.scene.Count());
+    Check(app.RunScript(), "script ran from the editor");
+    Check(app.script.error.empty(), "script reported no errors");
+    RenderFrame([&] { app.Draw(); });
+    for (int i = 0; i < 2; ++i) RenderFrame([&] { app.Draw(); });
+    Check(static_cast<int>(app.editor.scene.Count()) > actorsBefore,
+          "script spawned actors into the level");
+    Save("16-script-editor");
+
+    app.editor.showWorldSettings = true;
+    app.screen = astra::app::Screen::Editor;
+    app.transition = 1.0f;
+    for (int i = 0; i < 3; ++i) RenderFrame([&] { app.Draw(); });
+    Save("17-world-settings");
+    app.editor.showWorldSettings = false;
+}
+
 void ShotSettings(astra::app::AstraApp& app) {
     app.showSettings = true;
     app.settingsTab = 0;
@@ -448,7 +559,7 @@ void ShotKeyForge(astra::app::KeyForgeApp& keyForge, bool unlocked) {
         keyForge.stage = astra::app::KeyForgeApp::Stage::CreatePassphrase;
         RenderFrame([&] { keyForge.Draw(); });
         RenderFrame([&] { keyForge.Draw(); });
-        Save("13-keyforge-gate");
+        Save("20-keyforge-gate");
         return;
     }
 
@@ -462,13 +573,13 @@ void ShotKeyForge(astra::app::KeyForgeApp& keyForge, bool unlocked) {
     keyForge.GenerateCodes();
     RenderFrame([&] { keyForge.Draw(); });
     RenderFrame([&] { keyForge.Draw(); });
-    Save("14-keyforge-generate");
+    Save("18-keyforge-generate");
 
     keyForge.tab = astra::app::KeyForgeApp::Tab::Ledger;
     keyForge.GenerateCodes();
     RenderFrame([&] { keyForge.Draw(); });
     RenderFrame([&] { keyForge.Draw(); });
-    Save("15-keyforge-ledger");
+    Save("19-keyforge-ledger");
 }
 
 // ---------------------------------------------------------------------------
@@ -562,6 +673,9 @@ int main(int argc, char** argv) {
     ShotHubLoading(app);
     ShotHub(app);
     ShotEditor(app);
+    ShotPlay(app);
+    ShotRenderPanel(app);
+    ShotScriptEditor(app);
     ShotSettings(app);
     ShotCommandPalette(app);
 

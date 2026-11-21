@@ -28,7 +28,12 @@
 #include "astra/licensing/MasterKey.h"
 #include "astra/project/Project.h"
 #include "astra/scene/Reflection.h"
+#include "astra/image/Image.h"
 #include "astra/render/Camera.h"
+#include "astra/game/Player.h"
+#include "astra/asset/MeshBuilder.h"
+#include "astra/render/Pathtracer.h"
+#include "astra/script/Host.h"
 #include "astra/render/ViewportRenderer.h"
 #include "astra/scene/Reflection.h"
 #include "astra/scene/Scene.h"
@@ -497,6 +502,195 @@ void TestSampleLevel() {
     CHECK(storm.FindByName("Supercell 03 / Mesocyclone") != nullptr);
 }
 
+void TestPlayer() {
+    astra::scene::Scene level = astra::scene::Scene::CreateSampleLevel("PIE");
+    astra::game::Player player;
+    CHECK(astra::game::SpawnFromLevel(player, level));
+    // The sample level's Player Start sits above the floor, facing into it.
+    CHECK(player.position.z > 0.0f);
+    CHECK(player.Eye().y >= player.eyeHeight);  // the eye sits at eye height above the floor
+
+    const astra::scene::Vec3 start = player.position;
+    for (int i = 0; i < 60; ++i) {
+        astra::game::PlayerInput input;
+        input.forward = true;
+        player.Update(1.0f / 60.0f, input);
+    }
+    const float walked = std::sqrt((player.position.x - start.x) * (player.position.x - start.x) +
+                                   (player.position.z - start.z) * (player.position.z - start.z));
+    CHECK(walked > 3.0f);
+    CHECK(walked < 6.0f);  // walk speed is 4.6 m/s
+    CHECK(player.position.y >= 0.0f);
+
+    // Jump, then let gravity bring the pawn back down.
+    astra::game::PlayerInput jump;
+    jump.jump = true;
+    player.Update(1.0f / 60.0f, jump);
+    CHECK(player.velocityY > 0.0f);
+    CHECK(!player.onGround);
+    for (int i = 0; i < 120; ++i) player.Update(1.0f / 60.0f, astra::game::PlayerInput{});
+    CHECK(player.onGround);
+
+    // Strafing moves along the right vector, never along the view direction.
+    const astra::scene::Vec3 before = player.position;
+    astra::game::PlayerInput strafe;
+    strafe.right = true;
+    for (int i = 0; i < 30; ++i) player.Update(1.0f / 60.0f, strafe);
+    const astra::scene::Vec3 right = player.Right();
+    const astra::scene::Vec3 delta(player.position.x - before.x, 0.0f, player.position.z - before.z);
+    CHECK(delta.x * right.x + delta.z * right.z > 0.5f);
+
+    // Look input turns the pawn.
+    const float yawBefore = player.yawDeg;
+    astra::game::PlayerInput look;
+    look.lookDeltaX = 40.0f;
+    player.Update(1.0f / 60.0f, look);
+    CHECK(player.yawDeg != yawBefore);
+
+    // The camera maps to the eye and looks along Forward().
+    const astra::render::Camera camera = player.ViewCamera();
+    CHECK(std::abs(camera.target.y - player.Eye().y) < 1.0f);
+    CHECK(camera.distance <= 1.0f);
+
+    // Levels without a spawn point still produce a usable player.
+    astra::scene::Scene empty = astra::scene::Scene::CreateEmptyScene("empty");
+    astra::game::Player lost;
+    astra::game::SpawnFromLevel(lost, empty);
+    CHECK(lost.eyeHeight > 0.0f);
+}
+
+void TestPathtracer() {
+    astra::scene::Scene level = astra::scene::Scene::CreateSampleLevel("trace");
+    astra::render::TraceScene baked;
+    baked.Build(level);
+    CHECK(baked.TriangleCount() > 100);
+    CHECK(baked.TriangleCount() < 20000);
+
+    astra::render::TraceSettings settings;
+    settings.width = 64;
+    settings.height = 36;
+    settings.samples = 4;
+    settings.maxBounces = 2;
+
+    astra::render::TraceStats stats;
+    astra::render::Camera camera;
+    camera.target = astra::scene::Vec3(0.0f, 1.0f, 0.0f);
+    camera.distance = 14.0f;
+    camera.yawDeg = 20.0f;
+    camera.pitchDeg = 18.0f;
+
+    const astra::image::Buffer image = astra::render::Render(baked, camera, settings, &stats);
+    CHECK(!image.Empty());
+    CHECK_EQ(image.width, 64);
+    CHECK_EQ(image.height, 36);
+    CHECK(stats.triangles > 100);
+    CHECK(stats.rays > 0);
+    CHECK(stats.threads >= 1);
+
+    // Nothing may be fully black or fully blown out: the tonemap should keep detail.
+    double luminance = 0.0;
+    int bright = 0;
+    int dark = 0;
+    for (int y = 0; y < image.height; ++y) {
+        for (int x = 0; x < image.width; ++x) {
+            const astra::image::Color c = image.GetPixel(x, y);
+            const double l = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+            luminance += l;
+            if (l > 0.995) ++bright;
+            if (l < 0.02) ++dark;
+        }
+    }
+    const double pixels = static_cast<double>(image.width) * image.height;
+    luminance /= pixels;
+    CHECK(luminance > 0.08);
+    CHECK(luminance < 0.92);
+    CHECK(bright < image.width * image.height * 9 / 10);
+    CHECK(dark < image.width * image.height * 9 / 10);
+
+    // Ridiculously small requests are clamped instead of crashing, and the backend table is honest.
+    settings.width = 4;
+    settings.height = 3;
+    settings.samples = 1;
+    const astra::image::Buffer tiny = astra::render::Render(baked, camera, settings, nullptr);
+    CHECK(tiny.width >= 4);
+    CHECK(tiny.height >= 3);
+    CHECK(std::string(astra::render::TraceBackendName(astra::render::TraceBackend::Cpu)) != "");
+    CHECK(astra::render::TraceBackendAvailable(astra::render::TraceBackend::Cpu));
+    CHECK(!astra::render::TraceBackendAvailable(astra::render::TraceBackend::Gpu));
+
+    // PNG round-trip of an offline render.
+    const std::string path = astra::paths::Join(astra::paths::EngineDataDir(),
+                                                "selfcheck-trace.png");
+    CHECK(astra::render::RenderToFile(level, camera, settings, path, nullptr));
+    astra::image::Buffer reloaded;
+    CHECK(astra::image::ReadPng(path, reloaded));
+    CHECK_EQ(reloaded.width, tiny.width);
+    std::remove(path.c_str());
+}
+
+void TestPresets() {
+    int count = 0;
+    const char* const* shaders = astra::scene::MaterialShaderNames(count);
+    CHECK_EQ(count, astra::scene::kMaterialShaderCount);
+    for (int i = 0; i < count; ++i) {
+        CHECK(shaders[i] != nullptr);
+        CHECK(std::string(astra::scene::MaterialShaderName(static_cast<astra::scene::MaterialShader>(i))) ==
+              std::string(shaders[i]));
+    }
+
+    int presets = 0;
+    const char* const* names = astra::scene::ParticlePresetNames(presets);
+    CHECK(presets >= 5);
+    for (int i = 0; i < presets; ++i) {
+        CHECK(names[i] != nullptr);
+        astra::scene::ParticleComponent particles;
+        particles.preset = static_cast<astra::scene::ParticlePreset>(i);
+        particles.rate = 0.0f;
+        particles.lifetime = 0.0f;
+        particles.speed = 0.0f;
+        astra::scene::ApplyParticlePreset(particles);
+        CHECK(particles.rate > 0.0f);
+        CHECK(particles.lifetime > 0.0f);
+        CHECK(particles.speed >= 0.0f);
+        CHECK(particles.startSize > 0.0f);
+    }
+
+    // The mesh library survives a JSON round-trip with materials and particles attached.
+    astra::scene::Scene installed;
+    installed.SetName("presets");
+    const astra::scene::EntityId id = installed.CreateEntity("Pillar");
+    installed.Find(id)->Add(astra::scene::Component::Mesh | astra::scene::Component::Material |
+                            astra::scene::Component::Particles);
+    installed.Find(id)->material.shader = astra::scene::MaterialShader::Hologram;
+    installed.Find(id)->material.opacity = 0.6f;
+    installed.Find(id)->particles.preset = astra::scene::ParticlePreset::Fire;
+    astra::scene::ApplyParticlePreset(installed.Find(id)->particles);
+    astra::asset::MeshAsset cube = astra::asset::MakeCube();
+    cube.name = "Script Cube";
+    const std::uint32_t meshId = installed.AddMesh(std::move(cube));
+    CHECK(meshId >= 1);
+    installed.Find(id)->mesh.shape = astra::scene::MeshShape::Custom;
+    installed.Find(id)->mesh.meshId = meshId;
+    installed.Find(id)->mesh.size = astra::scene::Vec3(0.5f, 2.0f, 0.5f);
+
+    const std::string json = installed.ToJson();
+    astra::scene::Scene restored;
+    std::string error;
+    CHECK(restored.FromJson(json, &error));
+    CHECK_EQ(restored.Count(), installed.Count());
+    CHECK_EQ(restored.Meshes().size(), installed.Meshes().size());
+    const astra::scene::Entity* back = restored.Find(id);
+    CHECK(back != nullptr);
+    if (back) {
+        CHECK(back->material.shader == astra::scene::MaterialShader::Hologram);
+        CHECK(std::abs(back->material.opacity - 0.6f) < 0.001f);
+        CHECK(back->particles.preset == astra::scene::ParticlePreset::Fire);
+        CHECK(back->mesh.shape == astra::scene::MeshShape::Custom);
+        CHECK_EQ(back->mesh.meshId, meshId);
+        CHECK(std::abs(back->mesh.size.y - 2.0f) < 0.001f);
+    }
+}
+
 void TestViewport() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -606,6 +800,147 @@ void TestViewport() {
 
     ImGui::EndFrame();
     ImGui::DestroyContext();
+}
+
+void TestScript() {
+    astra::scene::Scene level = astra::scene::Scene::CreateSampleLevel();
+    astra::script::Host host(level);
+    std::vector<std::string> lines;
+    host.SetOutputSink([&lines](const std::string& line) { lines.push_back(line); });
+
+    const astra::script::ScriptRun run = host.Run(R"(
+        let total = 0
+        for (i in range(10)) { total = total + i }
+        print("total", total)
+
+        fn fib(n) {
+            if (n < 2) { return n }
+            return fib(n - 1) + fib(n - 2)
+        }
+        print("fib", fib(12))
+
+        let names = ["a", "b"]
+        names.push("c")
+        print("join", join(names, "-"), names.length)
+
+        let mixer = 3
+        mixer = mixer * 2 + 1
+        print("mixer", mixer, type(mixer), type("text"), type(names))
+        print("math", round(sqrt(81)), clamp(12, 0, 5), abs(-4))
+        print("str", upper("astra"), substr("viewport", 4, 4), format("{}+{}", 1, 2))
+    )");
+    CHECK(run.result.ok);
+    if (!run.result.ok) std::printf("  script error: %s\n", run.result.error.c_str());
+    CHECK(run.result.steps > 0);
+    CHECK(run.output.size() >= 6);
+
+    const auto has = [&run](const std::string& needle) {
+        for (const auto& line : run.output) {
+            if (line.find(needle) != std::string::npos) return true;
+        }
+        return false;
+    };
+    CHECK(has("total 45"));
+    CHECK(has("fib 144"));
+    CHECK(has("join a-b-c 3"));
+    CHECK(has("mixer 7 number string array"));
+    CHECK(has("math 9 5 4"));
+    CHECK(has("str ASTRA port 1+2"));
+
+    // ---- the scene API edits the level in place -----------------------------
+    const std::size_t before = level.Count();
+    const astra::script::ScriptRun sceneRun = host.Run(R"(
+        let id = spawnActor("Scripted pillar", "cube", -8.0, 1.0, -2.0)
+        setColor(id, 0.9, 0.3, 0.2)
+        setScale(id, 1.0, 3.0, 1.0)
+        setMaterial(id, "stripes", 0.2, 0.8, 0.0)
+        let pos = position(id)
+        print("spawned", id, pos[0], pos[1], pos[2])
+        print("found", findActor("Scripted pillar") == id)
+    )");
+    CHECK(sceneRun.result.ok);
+    if (!sceneRun.result.ok) std::printf("  scene script error: %s\n", sceneRun.result.error.c_str());
+    CHECK_EQ(level.Count(), before + 1);
+    const astra::scene::Entity* pillar = level.FindByName("Scripted pillar");
+    CHECK(pillar != nullptr);
+    if (pillar) {
+        CHECK(pillar->transform.scale.y == 3.0f);
+        CHECK(pillar->Has(astra::scene::Component::Material));
+        CHECK(pillar->material.shader == astra::scene::MaterialShader::Stripes);
+    }
+
+    // ---- mesh editing: build, deform, register, attach ----------------------
+    const astra::script::ScriptRun meshRun = host.Run(R"(
+        let mesh = meshSphere(16, 10)
+        let count = meshVertexCount(mesh)
+        for (i in range(count)) {
+            let v = meshVertex(mesh, i)
+            meshSetVertex(mesh, i, v[0] * 1.5, v[1] * 0.6 + sin(v[0] * 6.0) * 0.2, v[2] * 1.5)
+        }
+        meshRecomputeNormals(mesh)
+        let id = meshRegister(mesh, "Scripted blob")
+        print("registered", id, meshVertexCount(mesh), meshTriangleCount(mesh))
+        let actor = spawnActor("Blob", "custom", 6.0, 1.5, -4.0)
+        attachMesh(actor, id)
+        setColor(actor, 0.35, 0.85, 0.75)
+    )");
+    CHECK(meshRun.result.ok);
+    if (!meshRun.result.ok) std::printf("  mesh script error: %s\n", meshRun.result.error.c_str());
+    const astra::scene::Entity* blob = level.FindByName("Blob");
+    CHECK(blob != nullptr);
+    if (blob) {
+        CHECK(blob->mesh.shape == astra::scene::MeshShape::Custom);
+        CHECK(blob->mesh.meshId != 0);
+        const astra::scene::MeshAsset* asset = level.Mesh(blob->mesh.meshId);
+        CHECK(asset != nullptr);
+        if (asset) {
+            CHECK(asset->vertices.size() > 100);
+            CHECK(asset->TriangleCount() > 100);
+            CHECK(asset->name == "Scripted blob");
+        }
+    }
+
+    // ---- image editing: draw, save, reload ---------------------------------
+    const astra::script::ScriptRun imageRun = host.Run(R"(
+        let img = imageNew(48, 32)
+        imageGradient(img, 0.05, 0.08, 0.14, 0.9, 0.35, 0.30)
+        imageCircle(img, 24, 16, 10, 0.2, 0.8, 0.9, 1.0)
+        imageRect(img, 2, 2, 6, 4, 1.0, 1.0, 1.0)
+        imageNoise(img, 0.05)
+        imageSave(img, "/tmp/astra-selfcheck-image.png")
+        print("image", imageWidth(img), imageHeight(img), imageGet(img, 24, 16)[2])
+    )");
+    CHECK(imageRun.result.ok);
+    if (!imageRun.result.ok) std::printf("  image script error: %s\n", imageRun.result.error.c_str());
+    CHECK(host.Images().size() == 1);
+    if (!host.Images().empty()) {
+        CHECK_EQ(host.Images()[0].width, 48);
+        CHECK_EQ(host.Images()[0].height, 32);
+    }
+    astra::image::Buffer reloaded;
+    CHECK(astra::image::ReadPng("/tmp/astra-selfcheck-image.png", reloaded));
+    CHECK_EQ(reloaded.width, 48);
+    CHECK_EQ(reloaded.height, 32);
+
+    // ---- diagnostics -------------------------------------------------------
+    const astra::script::ScriptRun missing = host.Run("noSuchFunction(1)");
+    CHECK(!missing.result.ok);
+    CHECK(!missing.result.error.empty());
+    CHECK(missing.result.line >= 1);
+
+    const astra::script::ScriptRun syntax = host.Run("let x = ;");
+    CHECK(!syntax.result.ok);
+    CHECK(!syntax.result.error.empty());
+
+    const astra::script::ScriptRun typeError = host.Run("let x = 1\nx.foo = 2");
+    CHECK(!typeError.result.ok);
+
+    // The step budget stops runaway loops instead of freezing the editor.
+    astra::script::Host limited(level);
+    limited.SetStepLimit(2000);
+    const astra::script::ScriptRun runaway = limited.Run("while (true) { }");
+    CHECK(!runaway.result.ok);
+    CHECK(runaway.result.error.find("budget") != std::string::npos);
 }
 
 void TestProjects() {
@@ -742,6 +1077,10 @@ const TestCase kTests[] = {
     {"scene.runtime", TestScene},
     {"scene.sample_level", TestSampleLevel},
     {"render.viewport", TestViewport},
+    {"render.pathtracer", TestPathtracer},
+    {"scene.presets", TestPresets},
+    {"game.player", TestPlayer},
+    {"script.language", TestScript},
     {"project.files", TestProjects},
     {"github.parsing", TestGitHubParsing},
     {"settings.roundtrip", TestSettingsRoundTrip},

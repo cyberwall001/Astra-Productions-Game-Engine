@@ -26,6 +26,7 @@ void RegisterCode(AstraApp& app);
 void RegisterAccount(AstraApp& app);
 void ProjectHub(AstraApp& app);
 void Editor(AstraApp& app);
+void ScriptEditor(AstraApp& app);
 void Overlays(AstraApp& app);
 void SettingsModal(AstraApp& app);
 }  // namespace screens

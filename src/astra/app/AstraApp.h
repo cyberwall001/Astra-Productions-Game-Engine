@@ -4,6 +4,7 @@
 // (GLFW) and the headless preview/self-check tools drive the exact same code.
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -11,14 +12,18 @@
 #include "astra/auth/AuthService.h"
 #include "astra/github/GitHubClient.h"
 #include "astra/licensing/AccessCode.h"
+#include "astra/game/Player.h"
+#include "astra/image/Image.h"
 #include "astra/project/Project.h"
 #include "astra/render/Camera.h"
+#include "astra/render/Pathtracer.h"
 #include "astra/render/ViewportTypes.h"
 #include "astra/scene/Scene.h"
+#include "astra/script/Host.h"
 
 namespace astra::app {
 
-enum class Screen { Boot, SignIn, RegisterCode, RegisterAccount, ProjectHub, Editor };
+enum class Screen { Boot, SignIn, RegisterCode, RegisterAccount, ProjectHub, Editor, ScriptEditor };
 
 enum class ToastKind { Info, Success, Warning, Error };
 
@@ -72,6 +77,34 @@ struct HubState {
     std::string newProjectName;
 };
 
+// One snapshot-based undo entry: the whole level as JSON plus a label. Levels are small
+// (a few KB), so snapshotting is simpler and far more robust than per-field commands.
+struct UndoEntry {
+    std::string label;
+    std::string sceneJson;
+};
+
+// The script editor is a full screen (Blender's Text Editor / Unreal's IDE hand-off): a file
+// list, a code buffer, a run button and the console the script writes to.
+struct ScriptState {
+    std::string directory;      // base folder shown in the browser
+    std::string filePath;       // absolute path of the open file ("" = scratch buffer)
+    std::string fileName = "untitled.astra";
+    std::string source;
+    std::vector<std::string> files;
+    std::vector<std::string> output;
+    std::string error;
+    int errorLine = 0;
+    std::string status;
+    bool dirty = false;
+    bool fromRepo = false;
+    std::string repoName;
+    double lastMilliseconds = 0.0;
+    long long lastSteps = 0;
+    int templateIndex = 0;
+    int imageIndex = 0;
+};
+
 struct EditorState {
     scene::Scene scene;
     project::ProjectInfo project;
@@ -100,6 +133,31 @@ struct EditorState {
     bool showContentBrowser = true;
     bool showStatistics = true;
     bool showWeatherGauge = true;
+    bool showWorldSettings = false;
+    // ---- editing history -------------------------------------------------
+    std::vector<UndoEntry> undo;
+    std::vector<UndoEntry> redo;
+    int undoLimit = 64;
+    std::string pendingUndoLabel;
+
+    // ---- play in editor --------------------------------------------------
+    game::Player player;
+    bool playerSpawned = false;
+    float playTime = 0.0f;
+    bool playPossessCamera = true;
+
+    // ---- offline ray tracing ("Render" panel) ----------------------------
+    render::TraceSettings trace;
+    render::TraceStats traceStats;
+    image::Buffer traceImage;
+    std::string tracePath;
+    std::string traceError;
+    float traceProgress = 0.0f;
+    bool tracing = false;
+    bool showRenderPanel = false;
+    int materialPreset = 0;
+    int particlePresetIndex = 0;
+
     int consoleFilter = 0;  // 0 all, 1 info, 2 warn, 3 error
     std::string consoleInput;
     std::vector<std::string> consoleHistory;
@@ -146,6 +204,8 @@ struct AstraApp {
     RegisterForm reg;
     HubState hub;
     EditorState editor;
+    ScriptState script;
+    std::unique_ptr<script::Host> scriptHost;
     std::vector<Toast> toasts;
 
     bool showSettings = false;
@@ -180,6 +240,32 @@ struct AstraApp {
     void SaveScene();
     void NewScene();
     void RefreshDemoContent();
+
+    // ---- editor commands -------------------------------------------------
+    void PushUndo(std::string label);
+    void Undo();
+    void Redo();
+    bool CanUndo() const { return !editor.undo.empty(); }
+    bool CanRedo() const { return !editor.redo.empty(); }
+    void DuplicateSelected();
+    void DeleteSelected();
+
+    // ---- play in editor --------------------------------------------------
+    void EnterPlay();
+    void ExitPlay();
+
+    // ---- scripting -------------------------------------------------------
+    void OpenScriptEditor(std::string directory, std::string preferredFile = {},
+                          std::string repoName = {});
+    void RefreshScriptFiles();
+    bool OpenScriptFile(const std::string& path);
+    bool SaveScript();
+    bool RunScript();
+    void NewScript(std::string fileName = "untitled.astra");
+
+    // ---- offline rendering ----------------------------------------------
+    void StartTrace();
+    bool SaveTraceImage(std::string path = {});
 
     std::string GitHubToken() const;
     void SetGitHubToken(const std::string& token, const std::string& login);

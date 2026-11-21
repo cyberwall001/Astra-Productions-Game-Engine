@@ -219,45 +219,78 @@ void Toolbar(AstraApp& app, ImVec2 min, float width) {
         app.SetFooterStatus(app.editor.snapToGrid ? "Snapping on" : "Snapping off");
     }
 
-    // Right: play transport, save, build.
+    // Right: save, build, transport, then the editor tools. Each block is measured from the
+    // right edge so adding buttons can never overlap the ones already placed.
     float rightX = min.x + width - U(10.0f);
-    ImGui::SetCursorScreenPos(ImVec2(rightX - U(96.0f), min.y + U(8.0f)));
+    const auto place = [&](float blockWidth, float gap) {
+        ImGui::SetCursorScreenPos(ImVec2(rightX - U(blockWidth), min.y + U(8.0f)));
+        rightX -= U(blockWidth) + U(gap);
+    };
+
+    place(96.0f, 10.0f);
     if (ui::PrimaryButton("Save", ImVec2(U(96.0f), U(30.0f)), true, Icon::Save)) {
         app.SaveScene();
     }
-    rightX -= U(104.0f);
 
-    ImGui::SetCursorScreenPos(ImVec2(rightX - U(84.0f), min.y + U(8.0f)));
-    if (ui::SecondaryButton("Build", ImVec2(U(84.0f), U(30.0f)))) {
+    place(84.0f, 14.0f);
+    if (ui::SecondaryButton("Build", ImVec2(U(84.0f), U(30.0f)), true, Icon::Bolt)) {
         app.PushToast(ToastKind::Info, "Packaging",
                       "Cook + package runs from tools/package_windows.ps1.");
     }
-    rightX -= U(92.0f);
 
-    ImGui::SetCursorScreenPos(ImVec2(rightX - U(96.0f), min.y + U(8.0f)));
-    if (ui::IconButton("##stop", Icon::Stop, "Stop", app.editor.playing || app.editor.simulating,
-                       30.0f)) {
-        app.editor.playing = false;
+    // Play transport: stop, simulate, play.
+    place(96.0f, 14.0f);
+    if (ui::IconButton("##stop", Icon::Stop, "Stop (Esc)",
+                       app.editor.playing || app.editor.simulating, 30.0f)) {
+        app.ExitPlay();
         app.editor.simulating = false;
         app.SetFooterStatus("Stopped");
     }
-    ImGui::SameLine(0.0f, U(2.0f));
-    if (ui::IconButton("##simulate", Icon::Pause, "Simulate (no input)",
-                       app.editor.simulating, 30.0f)) {
+    ImGui::SameLine(0.0f, U(3.0f));
+    if (ui::IconButton("##simulate", Icon::Pause, "Simulate (no input)", app.editor.simulating,
+                       30.0f)) {
         app.editor.simulating = !app.editor.simulating;
-        app.editor.playing = false;
+        app.ExitPlay();
         app.SetFooterStatus(app.editor.simulating ? "Simulating" : "Simulation stopped");
     }
-    ImGui::SameLine(0.0f, U(2.0f));
-    if (ui::IconButton("##play", Icon::Play, "Play in editor", app.editor.playing, 30.0f)) {
-        app.editor.playing = !app.editor.playing;
-        app.editor.simulating = false;
+    ImGui::SameLine(0.0f, U(3.0f));
+    if (ui::IconButton("##play", Icon::Play, "Play in editor as the player (F5)", app.editor.playing,
+                       30.0f)) {
         if (app.editor.playing) {
-            log::Info("editor", "play-in-editor session started");
-            app.SetFooterStatus("Playing in editor");
+            app.ExitPlay();
         } else {
-            app.SetFooterStatus("Play stopped");
+            app.EnterPlay();
         }
+    }
+
+    // Editor tools: history, scripts, offline render, world settings.
+    place(176.0f, 12.0f);
+    if (ui::IconButton("##undo", Icon::Undo, "Undo (Ctrl+Z)", false, 30.0f, app.CanUndo())) {
+        app.Undo();
+    }
+    ImGui::SameLine(0.0f, U(3.0f));
+    if (ui::IconButton("##redo", Icon::Redo, "Redo (Ctrl+Shift+Z)", false, 30.0f,
+                       app.CanRedo())) {
+        app.Redo();
+    }
+    ImGui::SameLine(0.0f, U(10.0f));
+    if (ui::IconButton("##script", Icon::Code, "AstraScript workspace (Ctrl+Enter)",
+                       app.screen == Screen::ScriptEditor, 30.0f)) {
+        app.OpenScriptEditor(app.script.directory.empty()
+                                 ? (app.editor.project.isValid()
+                                        ? app.editor.project.rootPath + "/Scripts"
+                                        : std::string())
+                                 : app.script.directory);
+    }
+    ImGui::SameLine(0.0f, U(3.0f));
+    if (ui::IconButton("##render", Icon::Camera, "Path tracer render panel",
+                       app.editor.showRenderPanel, 30.0f)) {
+        app.editor.showRenderPanel = !app.editor.showRenderPanel;
+    }
+    ImGui::SameLine(0.0f, U(3.0f));
+    if (ui::IconButton("##world", Icon::Sliders, "World settings", app.editor.showWorldSettings,
+                       30.0f)) {
+        app.editor.showWorldSettings = !app.editor.showWorldSettings;
     }
 }
 
@@ -356,7 +389,28 @@ void Editor(AstraApp& app) {
         }
     }
 
+    panels::RenderPanel(app);
+    panels::WorldSettings(app);
+
     StatusBar(app, ImVec2(min.x, max.y - U(kStatusHeight)), width, U(kStatusHeight));
+
+    // Play-in-editor: the viewport renders through the pawn camera and WASD drives it.
+    if (app.editor.playing) {
+        app.editor.playTime += app.dt;
+        game::PlayerInput input;
+        ImGuiIO& playIo = ImGui::GetIO();
+        input.forward = ImGui::IsKeyDown(ImGuiKey_W);
+        input.back = ImGui::IsKeyDown(ImGuiKey_S);
+        input.right = ImGui::IsKeyDown(ImGuiKey_D);
+        input.left = ImGui::IsKeyDown(ImGuiKey_A);
+        input.jump = ImGui::IsKeyPressed(ImGuiKey_Space, false);
+        input.sprint = playIo.KeyShift;
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+            input.lookDeltaX = playIo.MouseDelta.x;
+            input.lookDeltaY = playIo.MouseDelta.y;
+        }
+        app.editor.player.Update(app.dt, input);
+    }
 
     // Keyboard shortcuts.
     ImGuiIO& io = ImGui::GetIO();
@@ -370,12 +424,25 @@ void Editor(AstraApp& app) {
         }
     }
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) app.SaveScene();
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+        if (io.KeyShift) app.Redo(); else app.Undo();
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y, false)) app.Redo();
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D, false) && !app.editor.playing) {
+        app.DuplicateSelected();
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+        app.OpenScriptEditor(app.script.directory.empty() ? app.editor.project.rootPath + "/Scripts"
+                                                          : app.script.directory);
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) {
+        if (app.editor.playing) app.ExitPlay(); else app.EnterPlay();
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && app.editor.playing) app.ExitPlay();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_K, false)) app.showCommandPalette = true;
     if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete, false) &&
         app.editor.selected != scene::kInvalidEntity) {
-        app.editor.scene.DestroyEntity(app.editor.selected);
-        app.editor.selected = scene::kInvalidEntity;
-        app.SetFooterStatus("Actor deleted");
+        app.DeleteSelected();
     }
 
     ImGui::SetCursorScreenPos(min);
