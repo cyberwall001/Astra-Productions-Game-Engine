@@ -28,7 +28,7 @@ AstraScript, an offline CPU path tracer and the Blender bridge. See [ROADMAP.md]
 ├─────────────────────────────────────────────────────────────────────┤
 │ src/astra/script     AstraScript tokenizer, parser, interpreter, host │
 │ src/astra/render     orbit camera, CPU rasteriser, picking, tracer   │
-│ src/astra/asset      mesh builders, OBJ import, Blender bridge inbox │
+│ src/astra/asset      mesh builders, OBJ import, Blender bridge, materials │
 │ src/astra/image      CPU image buffers, noise, blur, PNG IO          │
 │ src/astra/game       first-person pawn (play in editor)              │
 ├─────────────────────────────────────────────────────────────────────┤
@@ -80,7 +80,8 @@ Everything lives under `%LOCALAPPDATA%\Astra Productions\` (override with
 | `engine/bridge/status.json` | Blender heartbeat: version, scene name, timestamp |
 | `engine/renders/` | path-traced stills saved from the Render panel |
 
-A project folder always contains `astra.project.json`, `scenes/`, `assets/`, `content/`.
+A project folder always contains `astra.project.json`, `scenes/`, `assets/`, `content/`,
+and `materials/` (authored `*.astramat` files; seeded on first open and hot reloaded).
 New projects open on the **storm template**: `Chase Environment → {Chase Cam, Key Light,
 Supercell 03 / Mesocyclone → {Wall Cloud, Vortex Core, Precipitation Curtain}}, Chase
 Vehicle`. A project is never an empty viewport on first launch.

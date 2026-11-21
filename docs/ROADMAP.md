@@ -62,7 +62,7 @@ again: weather is one optional system, not the premise.
 - [ ] Sky + volumetric cloud pass on the GPU (the CPU volumetrics shipped in milestone 3).
 - [ ] GPU path tracer behind the same `TraceSettings` contract; the CPU tracer stays the
       fallback and keeps reporting itself as unavailable on GPU-less builds.
-- [ ] Shader authoring: per-material shader files with hot reload on top of the eight built-ins.
+- [x] Material assets (`*.astramat`) with hot reload and a Material Editor window (milestone 3).
 - [ ] Prefab system and content browser backed by `assets/` and `content/`.
 - [ ] Asset import pipeline (FBX/glTF via assimp, textures via stb/basis).
 - [ ] Ed25519 access codes: Studio keeps only the public key.

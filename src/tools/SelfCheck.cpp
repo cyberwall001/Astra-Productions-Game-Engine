@@ -4,11 +4,13 @@
 //   astra_selfcheck --list     list test names
 //   astra_selfcheck --filter X run tests whose name contains X
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "astra/app/Settings.h"
@@ -32,6 +34,7 @@
 #include "astra/render/Camera.h"
 #include "astra/game/Player.h"
 #include "astra/asset/Bridge.h"
+#include "astra/asset/Material.h"
 #include "astra/asset/MeshBuilder.h"
 #include "astra/render/Pathtracer.h"
 #include "astra/script/Host.h"
@@ -715,6 +718,117 @@ void TestPresets() {
     }
 }
 
+void TestMaterials() {
+    const std::string root = "/tmp/astra-selfcheck-materials";
+    astra::fs::CreateDirectories(root);
+    for (const std::string& entry : astra::fs::ListDirectory(root)) {
+        astra::fs::RemoveFile(astra::paths::Join(root, entry));
+    }
+
+    // Round trip: what we write must parse back to the same values.
+    astra::asset::MaterialAsset authored;
+    authored.name = "Test Copper";
+    authored.shader = astra::scene::MaterialShader::Hologram;
+    authored.baseColor = astra::scene::Vec3(0.72f, 0.42f, 0.18f);
+    authored.accentColor = astra::scene::Vec3(0.12f, 0.06f, 0.02f);
+    authored.roughness = 0.31f;
+    authored.metallic = 0.94f;
+    authored.emissive = 0.6f;
+    authored.uvScale = 7.0f;
+
+    const std::string text = astra::asset::SerializeMaterial(authored);
+    CHECK(text.find("shader = Hologram") != std::string::npos);
+    astra::asset::MaterialAsset parsed;
+    std::string error;
+    CHECK(astra::asset::ParseMaterial(text, parsed, &error));
+    CHECK_EQ(parsed.name, authored.name);
+    CHECK(parsed.shader == authored.shader);
+    CHECK(std::fabs(parsed.baseColor.x - 0.72f) < 0.01f);
+    CHECK(std::fabs(parsed.metallic - 0.94f) < 0.01f);
+    CHECK(std::fabs(parsed.uvScale - 7.0f) < 0.01f);
+
+    // Tolerant reader: comments, ':' separators, unknown keys, missing keys.
+    astra::asset::MaterialAsset loose;
+    CHECK(astra::asset::ParseMaterial("# a comment\nname: Loose\nshader: Stripes\n"
+                                      "roughness: 0.2\nfutureKey = whatever\n",
+                                      loose, &error));
+    CHECK_EQ(loose.name, std::string("Loose"));
+    CHECK(loose.shader == astra::scene::MaterialShader::Stripes);
+    CHECK(std::fabs(loose.roughness - 0.2f) < 0.01f);
+    CHECK(std::fabs(loose.metallic) < 0.001f);  // default kept
+    // Values are clamped to sane ranges instead of being rejected.
+    CHECK(astra::asset::ParseMaterial("roughness = 9\nopacity = -2\n", loose, &error));
+    CHECK(loose.roughness <= 1.0f);
+    CHECK(loose.opacity >= 0.0f);
+    // Broken files fail with a message instead of silently loading garbage.
+    CHECK(!astra::asset::ParseMaterial("roughness\n", loose, &error));
+    CHECK(!error.empty());
+
+    // Library: seeds the starter set, loads it, applies to an actor.
+    astra::asset::MaterialLibrary library;
+    library.Scan(root);
+    CHECK(library.All().size() >= astra::asset::StarterMaterials().size());
+    CHECK(astra::fs::Exists(astra::paths::Join(root, "Brushed_Steel.astramat")));
+    const astra::asset::MaterialAsset* steel = library.Find("Brushed Steel");
+    CHECK(steel != nullptr);
+    if (steel) CHECK(std::fabs(steel->metallic - 0.9f) < 0.01f);
+
+    astra::scene::Scene scene = astra::scene::Scene::CreateEmptyScene("materials");
+    astra::scene::Entity* actor = scene.Find(scene.CreateEntity("Panel"));
+    CHECK(astra::asset::MaterialLibrary::ApplyTo(scene, actor->id, "Brushed Steel", library));
+    actor = scene.Find(actor->id);
+    CHECK(actor != nullptr && actor->Has(astra::scene::Component::Material));
+    if (actor) {
+        CHECK(actor->material.shader == astra::scene::MaterialShader::Lit);
+        CHECK(std::fabs(actor->material.metallic - 0.9f) < 0.01f);
+    }
+    CHECK(!astra::asset::MaterialLibrary::ApplyTo(scene, actor->id, "No Such Material", library));
+
+    // Editing a file on disk and saving through the library writes the new body.
+    if (astra::asset::MaterialAsset* mutableSteel = library.FindMutable("Brushed Steel")) {
+        mutableSteel->emissive = 1.25f;
+        CHECK(library.Save(*mutableSteel));
+    }
+    astra::asset::MaterialLibrary reloadedLibrary;
+    reloadedLibrary.Scan(root);
+    const astra::asset::MaterialAsset* reloadedSteel = reloadedLibrary.Find("Brushed Steel");
+    CHECK(reloadedSteel != nullptr);
+    if (reloadedSteel) CHECK(std::fabs(reloadedSteel->emissive - 1.25f) < 0.01f);
+
+    // Hot reload: touch the file behind the library's back.
+    const std::string path = astra::paths::Join(root, "Brushed_Steel.astramat");
+    CHECK(astra::fs::WriteTextFileAtomic(path, "name = Brushed Steel\nshader = Checker\n"
+                                               "metallic = 0.4\n"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    // Force a different timestamp: some filesystems have coarse resolution.
+    CHECK(astra::fs::WriteTextFileAtomic(path, "name = Brushed Steel\nshader = Checker\n"
+                                               "metallic = 0.4\n"));
+    CHECK(reloadedLibrary.ReloadChanged() >= 1);
+    const astra::asset::MaterialAsset* hot = reloadedLibrary.Find("Brushed Steel");
+    CHECK(hot != nullptr);
+    if (hot) {
+        CHECK(hot->shader == astra::scene::MaterialShader::Checker);
+        CHECK(std::fabs(hot->metallic - 0.4f) < 0.01f);
+    }
+    // Nothing changed -> nothing reloaded.
+    CHECK_EQ(reloadedLibrary.ReloadChanged(), 0);
+
+    // The script surface sees the same library.
+    astra::scene::Scene scripted = astra::scene::Scene::CreateEmptyScene("scripted");
+    astra::script::Host host(scripted);
+    const astra::script::ScriptRun run = host.Run(R"(
+        let names = materialNames()
+        let has = false
+        for (name in names) { if (name == "Brushed Steel") { has = true } }
+        let id = spawnActor("Panel", 0, 1, 0)
+        applyMaterial(id, "Brushed Steel")
+    )");
+    CHECK(run.result.ok);
+    const astra::scene::Entity* panel = scripted.FindByName("Panel");
+    CHECK(panel != nullptr);
+    if (panel) CHECK(panel->Has(astra::scene::Component::Material));
+}
+
 void TestBlenderBridge() {
     // Start from an empty inbox so the assertions are about this run only.
     const std::string inbox = astra::asset::InboxDirectory();
@@ -1181,6 +1295,7 @@ const TestCase kTests[] = {
     {"scene.presets", TestPresets},
     {"game.player", TestPlayer},
     {"bridge.blender", TestBlenderBridge},
+    {"asset.materials", TestMaterials},
     {"script.language", TestScript},
     {"project.files", TestProjects},
     {"github.parsing", TestGitHubParsing},

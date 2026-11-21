@@ -23,6 +23,9 @@ bool WriteBinaryFileAtomic(const std::string& path, const void* data, std::size_
 
 std::uint64_t FileSize(const std::string& path);
 
+// Last write time in ticks (0 when the file is missing) - used for hot reload.
+std::uint64_t ModifiedTime(const std::string& path);
+
 // Names (not full paths) of entries in `directory`, sorted alphabetically.
 std::vector<std::string> ListDirectory(const std::string& directory);
 

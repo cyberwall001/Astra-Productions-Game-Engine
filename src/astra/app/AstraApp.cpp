@@ -316,6 +316,7 @@ void AstraApp::OpenProject(const project::ProjectInfo& info) {
     recents.Touch(info);
     settings.Get().activeProjectPath = info.rootPath;
     settings.Save();
+    LoadMaterials();
     Goto(Screen::Editor);
     log::Info("project", "opened " + info.name + " at " + info.rootPath);
 }
@@ -680,6 +681,43 @@ void AstraApp::ImportFromBlender() {
               str::Format("Imported %d mesh(es) from Blender", result.imported),
               str::Format("%d triangles, %d skipped", result.triangles, result.skipped));
     SetFooterStatus(str::Format("Imported %d Blender mesh(es)", result.imported));
+}
+
+void AstraApp::LoadMaterials() {
+    const std::string directory =
+        editor.project.isValid() ? paths::Join(editor.project.rootPath, "materials")
+                                 : asset::MaterialLibrary::DefaultDirectory();
+    editor.materials.Scan(directory);
+    const int count = static_cast<int>(editor.materials.All().size());
+    editor.materialIndex = count > 0 ? std::clamp(editor.materialIndex, 0, count - 1) : 0;
+    editor.materialStatus = str::Format("%d material(s) in %s", count, directory.c_str());
+}
+
+void AstraApp::PollMaterialHotReload(float dt) {
+    editor.materialReloadTimer += dt;
+    if (editor.materialReloadTimer < 0.75f) return;
+    editor.materialReloadTimer = 0.0f;
+    const int reloaded = editor.materials.ReloadChanged();
+    if (reloaded > 0) {
+        editor.materialStatus = str::Format("Hot reloaded %d material(s)", reloaded);
+        SetFooterStatus(editor.materialStatus);
+    }
+}
+
+bool AstraApp::ApplyMaterialToSelection(const std::string& name) {
+    if (editor.selected == scene::kInvalidEntity) {
+        PushToast(ToastKind::Info, "Nothing selected", "Select an actor to assign a material.");
+        return false;
+    }
+    const asset::MaterialAsset* material = editor.materials.Find(name);
+    if (material == nullptr) return false;
+    PushUndo("assign material " + name);
+    if (!asset::MaterialLibrary::ApplyTo(editor.scene, editor.selected, name, editor.materials)) {
+        return false;
+    }
+    editor.scene.MarkDirty();
+    SetFooterStatus("Assigned material " + name);
+    return true;
 }
 
 void AstraApp::RefreshDemoContent() {

@@ -13,6 +13,7 @@
 #include "astra/ui/Branding.h"
 #include "astra/ui/Widgets.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 
 namespace astra::app {
 namespace {
@@ -551,6 +552,19 @@ void DrawAstraApp(AstraApp& app) {
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
+
+    // Editor tool windows are root-level ImGui windows, but the panel bodies underneath are
+    // child windows recreated every frame - which lands them later in the window list, on top
+    // of those tools. Re-front the tools after the screen has drawn so they stay on top.
+    if (app.screen == Screen::Editor) {
+        static const char* const kToolWindows[] = {"Render - Path Tracer###render_panel",
+                                                   "World Settings", "Material Editor"};
+        for (const char* name : kToolWindows) {
+            if (ImGuiWindow* window = ImGui::FindWindowByName(name)) {
+                if (window->Active || window->WasActive) ImGui::BringWindowToDisplayFront(window);
+            }
+        }
+    }
 
     screens::Overlays(app);
 }
