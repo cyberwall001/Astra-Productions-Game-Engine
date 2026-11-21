@@ -1,7 +1,10 @@
 #include "astra/app/AstraApp.h"
 
+#include "astra/asset/Bridge.h"
+
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 #include "astra/app/Screens.h"
 #include "astra/core/FileIO.h"
@@ -260,13 +263,22 @@ void AstraApp::StartRepoSync(bool forceDemo) {
 }
 
 void AstraApp::OpenRepo(const github::Repo& repo) {
+    const std::string dir = paths::Join(WorkspaceRoot(), str::SanitizeFileName(repo.name));
+
+    // No astra.project.json? The repository is still worth opening: land in the script
+    // workspace, point it at any scripts the repo ships, and offer to convert it into a level.
     if (!repo.hasAstraProject) {
-        PushToast(ToastKind::Warning, "No Astra project in " + repo.name,
-              "Add an astra.project.json at the repository root to open it here.");
+        fs::CreateDirectories(dir);
+        std::string scripts = paths::Join(dir, "Scripts");
+        if (!fs::IsDirectory(scripts)) scripts = dir;
+        OpenScriptEditor(scripts, std::string(), repo.name);
+        PushToast(ToastKind::Info, "Script workspace: " + repo.name,
+                  "No astra.project.json here, so scripts open directly. Save one as a level "
+                  "tool, or press Build to scaffold a project.");
+        log::Info("project", "opened non-Astra repo in the script editor: " + repo.fullName);
         return;
     }
 
-    const std::string dir = paths::Join(WorkspaceRoot(), str::SanitizeFileName(repo.name));
     project::ProjectInfo info;
     if (!project::Read(dir, info)) {
         info.name = repo.name;
@@ -349,6 +361,325 @@ void AstraApp::NewScene() {
                                                    : editor.scene.Roots().front();
     editor.scene.MarkDirty();
     SetFooterStatus("New scene created");
+}
+
+// ---------------------------------------------------------------------------
+// Undo / redo: whole-level snapshots, pushed before a command mutates the scene.
+// ---------------------------------------------------------------------------
+void AstraApp::PushUndo(std::string label) {
+    UndoEntry entry;
+    entry.label = std::move(label);
+    entry.sceneJson = editor.scene.ToJson();
+    editor.undo.push_back(std::move(entry));
+    if (static_cast<int>(editor.undo.size()) > editor.undoLimit) {
+        editor.undo.erase(editor.undo.begin());
+    }
+    editor.redo.clear();
+}
+
+void AstraApp::Undo() {
+    if (editor.undo.empty()) {
+        SetFooterStatus("Nothing to undo");
+        return;
+    }
+    UndoEntry entry = editor.undo.back();
+    editor.undo.pop_back();
+
+    UndoEntry current;
+    current.label = entry.label;
+    current.sceneJson = editor.scene.ToJson();
+    editor.redo.push_back(std::move(current));
+
+    std::string error;
+    if (!editor.scene.FromJson(entry.sceneJson, &error)) {
+        PushToast(ToastKind::Error, "Undo failed", error);
+        return;
+    }
+    if (!editor.scene.Find(editor.selected)) editor.selected = scene::kInvalidEntity;
+    editor.scene.MarkDirty();
+    SetFooterStatus("Undo: " + entry.label);
+}
+
+void AstraApp::Redo() {
+    if (editor.redo.empty()) {
+        SetFooterStatus("Nothing to redo");
+        return;
+    }
+    UndoEntry entry = editor.redo.back();
+    editor.redo.pop_back();
+
+    UndoEntry current;
+    current.label = entry.label;
+    current.sceneJson = editor.scene.ToJson();
+    editor.undo.push_back(std::move(current));
+
+    std::string error;
+    if (!editor.scene.FromJson(entry.sceneJson, &error)) {
+        PushToast(ToastKind::Error, "Redo failed", error);
+        return;
+    }
+    if (!editor.scene.Find(editor.selected)) editor.selected = scene::kInvalidEntity;
+    editor.scene.MarkDirty();
+    SetFooterStatus("Redo: " + entry.label);
+}
+
+void AstraApp::DuplicateSelected() {
+    const scene::Entity* source = editor.scene.Find(editor.selected);
+    if (!source) {
+        SetFooterStatus("Select an actor to duplicate");
+        return;
+    }
+    PushUndo("duplicate " + source->name);
+    const scene::EntityId copyId = editor.scene.CreateEntity(source->name + " copy", source->parent);
+    if (scene::Entity* copy = editor.scene.Find(copyId)) {
+        const std::string name = copy->name;
+        *copy = *source;
+        copy->id = copyId;
+        copy->name = name;
+        copy->parent = source->parent;
+        copy->children.clear();
+        copy->transform.position.x += 1.2f;
+        copy->transform.position.z += 1.2f;
+    }
+    editor.selected = copyId;
+    SetFooterStatus("Duplicated " + source->name);
+}
+
+void AstraApp::DeleteSelected() {
+    if (editor.selected == scene::kInvalidEntity) return;
+    const scene::Entity* entity = editor.scene.Find(editor.selected);
+    if (!entity) return;
+    const std::string name = entity->name;
+    PushUndo("delete " + name);
+    editor.scene.DestroyEntity(editor.selected);
+    editor.selected = scene::kInvalidEntity;
+    SetFooterStatus("Deleted " + name);
+}
+
+// ---------------------------------------------------------------------------
+// Play in editor
+// ---------------------------------------------------------------------------
+void AstraApp::EnterPlay() {
+    if (editor.playing) return;
+    if (!editor.playerSpawned) {
+        game::SpawnFromLevel(editor.player, editor.scene);
+        editor.playerSpawned = true;
+    }
+    editor.playing = true;
+    editor.simulating = false;
+    editor.playTime = 0.0f;
+    editor.viewport.mode = render::ViewMode::Shaded;
+    log::Info("editor", "play-in-editor session started");
+    SetFooterStatus("Playing - WASD to move, right drag to look, Esc to stop");
+}
+
+void AstraApp::ExitPlay() {
+    if (!editor.playing) return;
+    editor.playing = false;
+    editor.playTime = 0.0f;
+    SetFooterStatus("Play stopped");
+}
+
+// ---------------------------------------------------------------------------
+// Scripting
+// ---------------------------------------------------------------------------
+void AstraApp::RefreshScriptFiles() {
+    script.files.clear();
+    if (script.directory.empty()) return;
+    for (const auto& entry : fs::ListDirectory(script.directory)) {
+        const std::string full = paths::Join(script.directory, entry);
+        if (fs::IsDirectory(full)) {
+            // One level deep is enough for script folders and keeps the list readable.
+            for (const auto& child : fs::ListDirectory(full)) {
+                const std::string extension = child.size() > 6 ? child.substr(child.size() - 6) : "";
+                if (extension == ".astra") script.files.push_back(entry + "/" + child);
+            }
+            continue;
+        }
+        if (entry.size() > 6 && entry.substr(entry.size() - 6) == ".astra") {
+            script.files.push_back(entry);
+        }
+    }
+    std::sort(script.files.begin(), script.files.end());
+}
+
+void AstraApp::OpenScriptEditor(std::string directory, std::string preferredFile,
+                                std::string repoName) {
+    script.fromRepo = !repoName.empty();
+    script.repoName = std::move(repoName);
+    script.directory = std::move(directory);
+    RefreshScriptFiles();
+
+    if (!preferredFile.empty() && fs::Exists(preferredFile)) {
+        OpenScriptFile(preferredFile);
+    } else if (!script.files.empty()) {
+        OpenScriptFile(paths::Join(script.directory, script.files.front()));
+    } else if (script.source.empty()) {
+        NewScript(script.fromRepo ? "scratch.astra" : "level_tools.astra");
+    }
+    Goto(Screen::ScriptEditor);
+}
+
+void AstraApp::NewScript(std::string fileName) {
+    static const char* kTemplate = R"astra(// AstraScript - runs against the open level the moment you press Run.
+// The full API lives in docs/SCRIPTING.md: scene, mesh, image, math, io.
+
+print("hello from AstraScript")
+
+let sun = findActor("Directional Light")
+if (sun != 0) {
+    print("sun actor:", actorName(sun))
+}
+
+// Build a ring of pillars with a scripted mesh.
+let mesh = meshCylinder(20)
+meshRecenter(mesh)
+let meshId = meshRegister(mesh, "Script pillar")
+
+for (i in range(8)) {
+    let angle = i * TAU / 8.0
+    let x = cos(angle) * 6.0
+    let z = sin(angle) * 6.0
+    let actor = spawnActor(format("Pillar {}", i), "custom", x, 1.5, z)
+    attachMesh(actor, meshId)
+    setScale(actor, 0.7, 3.0, 0.7)
+    setMaterial(actor, "lit", 0.35, 0.1, 0.0)
+    setColor(actor, 0.42, 0.55, 0.78)
+}
+print("pillars:", actorCount())
+)astra";
+    script.fileName = std::move(fileName);
+    script.source = kTemplate;
+    script.filePath.clear();
+    script.error.clear();
+    script.errorLine = 0;
+    script.status = "New script - Run to execute it against the level";
+    script.dirty = true;
+    script.output.clear();
+}
+
+bool AstraApp::OpenScriptFile(const std::string& path) {
+    std::string text;
+    if (!fs::ReadTextFile(path, text)) {
+        PushToast(ToastKind::Error, "Could not open script", path);
+        return false;
+    }
+    script.source = std::move(text);
+    script.filePath = path;
+    script.fileName = fs::FileName(path);
+    script.dirty = false;
+    script.error.clear();
+    script.errorLine = 0;
+    script.status = "Opened " + script.fileName;
+    return true;
+}
+
+bool AstraApp::SaveScript() {
+    std::string path = script.filePath;
+    if (path.empty()) {
+        if (script.directory.empty()) {
+            PushToast(ToastKind::Warning, "No folder selected",
+                      "Open a project or repository to give the script a home.");
+            return false;
+        }
+        path = paths::Join(script.directory, script.fileName.empty() ? "untitled.astra"
+                                                                   : script.fileName);
+    }
+    const std::size_t slash = path.find_last_of("/\\");
+    if (slash != std::string::npos) fs::CreateDirectories(path.substr(0, slash));
+    if (!fs::WriteTextFileAtomic(path, script.source)) {
+        PushToast(ToastKind::Error, "Could not save script", path);
+        return false;
+    }
+    script.filePath = path;
+    script.fileName = fs::FileName(path);
+    script.dirty = false;
+    RefreshScriptFiles();
+    SetFooterStatus("Saved " + script.fileName);
+    return true;
+}
+
+bool AstraApp::RunScript() {
+    if (!scriptHost) scriptHost = std::make_unique<script::Host>(editor.scene);
+    scriptHost->Reset();
+    scriptHost->SetWorkingDirectory(script.directory);
+    scriptHost->SetOutputSink(nullptr);
+    PushUndo("run " + script.fileName);
+
+    const script::ScriptRun run = scriptHost->Run(script.source, script.fileName);
+    script.output = run.output;
+    script.error = run.result.error;
+    script.errorLine = run.result.line;
+    script.lastMilliseconds = run.result.milliseconds;
+    script.lastSteps = run.result.steps;
+
+    if (run.result.ok) {
+        script.status = str::Format("Ran %s in %.1f ms (%lld steps)", script.fileName.c_str(),
+                                    run.result.milliseconds, run.result.steps);
+        SetFooterStatus(script.status);
+        editor.scene.MarkDirty();
+    } else {
+        script.status = str::Format("%s:%d  %s", script.fileName.c_str(), run.result.line,
+                                    run.result.error.c_str());
+        PushToast(ToastKind::Error, "Script error", script.status);
+    }
+    return run.result.ok;
+}
+
+// ---------------------------------------------------------------------------
+// Offline ray tracing
+// ---------------------------------------------------------------------------
+void AstraApp::StartTrace() {
+    if (editor.tracing) return;
+    editor.tracing = true;
+    editor.traceProgress = 0.0f;
+    editor.traceError.clear();
+    editor.showRenderPanel = true;
+}
+
+bool AstraApp::SaveTraceImage(std::string path) {
+    if (editor.traceImage.Empty()) return false;
+    if (path.empty()) {
+        const std::string base = paths::EngineDataDir();
+        fs::CreateDirectories(paths::Join(base, "renders"));
+        path = paths::Join(base, "renders/" + str::Format("render-%lld.png",
+                                                          static_cast<long long>(time::NowUtc())));
+    }
+    if (!image::WritePng(editor.traceImage, path)) {
+        editor.traceError = "Could not write " + path;
+        return false;
+    }
+    editor.tracePath = path;
+    SetFooterStatus("Saved render to " + path);
+    return true;
+}
+
+void AstraApp::ImportFromBlender() {
+    const std::vector<asset::BridgeJob> pending = asset::ScanInbox();
+    if (pending.empty()) {
+        PushToast(ToastKind::Info, "Nothing waiting from Blender",
+                  "Use the Astra panel in Blender's sidebar to send a mesh. Folder: " +
+                      asset::InboxDirectory());
+        return;
+    }
+    PushUndo("import from Blender");
+    const asset::BridgeImportResult result = asset::ImportInbox(editor.scene);
+    if (result.imported == 0) {
+        PushToast(ToastKind::Error, "Blender import failed",
+                  result.errors.empty() ? "The inbox held no usable meshes."
+                                        : result.errors.front());
+        return;
+    }
+    if (!result.actorNames.empty()) {
+        if (const scene::Entity* actor = editor.scene.FindByName(result.actorNames.back())) {
+            editor.selected = actor->id;
+        }
+    }
+    editor.scene.MarkDirty();
+    PushToast(ToastKind::Success,
+              str::Format("Imported %d mesh(es) from Blender", result.imported),
+              str::Format("%d triangles, %d skipped", result.triangles, result.skipped));
+    SetFooterStatus(str::Format("Imported %d Blender mesh(es)", result.imported));
 }
 
 void AstraApp::RefreshDemoContent() {

@@ -28,6 +28,10 @@ void Console(AstraApp& app, ImVec2 pos, ImVec2 size);
 void ConsoleBody(AstraApp& app, ImVec2 pos, ImVec2 size);
 void Statistics(AstraApp& app, ImVec2 pos, ImVec2 size);
 
+// Floating windows (movable, resizable): offline path tracer and the world/atmosphere settings.
+void RenderPanel(AstraApp& app);
+void WorldSettings(AstraApp& app);
+
 // Shared by the toolbar and menus.
 void ToolbarAction(AstraApp& app, const char* label, ui::Icon icon, const char* shortcut);
 

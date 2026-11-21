@@ -535,6 +535,7 @@ void DrawAstraApp(AstraApp& app) {
         case Screen::RegisterAccount: screens::RegisterAccount(app); break;
         case Screen::ProjectHub: screens::ProjectHub(app); break;
         case Screen::Editor: screens::Editor(app); break;
+        case Screen::ScriptEditor: screens::ScriptEditor(app); break;
     }
 
     // Curtain used for screen transitions (draw-list primitives cannot be alpha-multiplied,

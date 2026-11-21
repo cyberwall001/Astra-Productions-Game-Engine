@@ -6,6 +6,8 @@
 #include <cmath>
 #include <vector>
 
+#include "astra/asset/MeshBuilder.h"
+#include "astra/image/Image.h"
 #include "imgui_internal.h"
 
 namespace astra::render {
@@ -53,187 +55,12 @@ ImU32 WithAlpha(ImU32 color, float alpha) {
 }
 
 // ---------------------------------------------------------------------------
-// Mesh building: every primitive is a unit shape the actor's size scales.
+// Geometry: primitives come from asset::Primitive, imported/scripted meshes come from the
+// scene's mesh library, so the viewport never builds geometry itself.
 // ---------------------------------------------------------------------------
-struct MeshVertex {
-    Vec3 position;
-    Vec3 normal;
-};
-
-struct MeshData {
-    std::vector<MeshVertex> vertices;
-    std::vector<unsigned int> indices;
-};
-
-void AddQuad(MeshData& mesh, const MeshVertex& a, const MeshVertex& b, const MeshVertex& c,
-             const MeshVertex& d) {
-    const auto base = static_cast<unsigned int>(mesh.vertices.size());
-    mesh.vertices.push_back(a);
-    mesh.vertices.push_back(b);
-    mesh.vertices.push_back(c);
-    mesh.vertices.push_back(d);
-    mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
-}
-
-MeshData BuildCube() {
-    MeshData mesh;
-    const Vec3 n[6] = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
-    for (int face = 0; face < 6; ++face) {
-        const Vec3 normal = n[face];
-        Vec3 u = std::fabs(normal.y) > 0.5f ? Vec3(1, 0, 0) : Vec3(0, 1, 0);
-        const Vec3 v = Cross(normal, u);
-        const Vec3 center = normal * 0.5f;
-        const MeshVertex a{center - u * 0.5f - v * 0.5f, normal};
-        const MeshVertex b{center + u * 0.5f - v * 0.5f, normal};
-        const MeshVertex c{center + u * 0.5f + v * 0.5f, normal};
-        const MeshVertex d{center - u * 0.5f + v * 0.5f, normal};
-        AddQuad(mesh, a, b, c, d);
-    }
-    return mesh;
-}
-
-MeshData BuildSphere(int segments = 24, int rings = 14) {
-    MeshData mesh;
-    for (int ring = 0; ring <= rings; ++ring) {
-        const float v = static_cast<float>(ring) / static_cast<float>(rings);
-        const float phi = v * 3.14159265f;
-        for (int segment = 0; segment <= segments; ++segment) {
-            const float u = static_cast<float>(segment) / static_cast<float>(segments);
-            const float theta = u * 6.28318531f;
-            const Vec3 normal(std::sin(phi) * std::cos(theta), std::cos(phi),
-                              std::sin(phi) * std::sin(theta));
-            mesh.vertices.push_back({normal * 0.5f, normal});
-        }
-    }
-    const int stride = segments + 1;
-    for (int ring = 0; ring < rings; ++ring) {
-        for (int segment = 0; segment < segments; ++segment) {
-            const auto a = static_cast<unsigned int>(ring * stride + segment);
-            const auto b = a + 1;
-            const auto c = a + static_cast<unsigned int>(stride) + 1;
-            const auto d = a + static_cast<unsigned int>(stride);
-            mesh.indices.insert(mesh.indices.end(), {a, d, c, a, c, b});
-        }
-    }
-    return mesh;
-}
-
-MeshData BuildCylinder(int segments = 24) {
-    MeshData mesh;
-    for (int segment = 0; segment <= segments; ++segment) {
-        const float u = static_cast<float>(segment) / static_cast<float>(segments);
-        const float theta = u * 6.28318531f;
-        const Vec3 normal(std::cos(theta), 0.0f, std::sin(theta));
-        mesh.vertices.push_back({Vec3(normal.x * 0.5f, -0.5f, normal.z * 0.5f), normal});
-        mesh.vertices.push_back({Vec3(normal.x * 0.5f, 0.5f, normal.z * 0.5f), normal});
-    }
-    for (int segment = 0; segment < segments; ++segment) {
-        const auto base = static_cast<unsigned int>(segment * 2);
-        mesh.indices.insert(mesh.indices.end(),
-                            {base, base + 1, base + 3, base, base + 3, base + 2});
-    }
-    // Caps, as triangle fans around the centre vertex.
-    for (int cap = 0; cap < 2; ++cap) {
-        const float y = cap == 0 ? -0.5f : 0.5f;
-        const Vec3 normal(0.0f, cap == 0 ? -1.0f : 1.0f, 0.0f);
-        const auto center = static_cast<unsigned int>(mesh.vertices.size());
-        mesh.vertices.push_back({Vec3(0.0f, y, 0.0f), normal});
-        for (int segment = 0; segment <= segments; ++segment) {
-            const float theta = static_cast<float>(segment) / static_cast<float>(segments) *
-                                6.28318531f;
-            mesh.vertices.push_back(
-                {Vec3(std::cos(theta) * 0.5f, y, std::sin(theta) * 0.5f), normal});
-        }
-        for (int segment = 0; segment < segments; ++segment) {
-            const auto a = center + 1 + static_cast<unsigned int>(segment);
-            const auto b = a + 1;
-            if (cap == 0) {
-                mesh.indices.insert(mesh.indices.end(), {center, b, a});
-            } else {
-                mesh.indices.insert(mesh.indices.end(), {center, a, b});
-            }
-        }
-    }
-    return mesh;
-}
-
-MeshData BuildCone(int segments = 24) {
-    MeshData mesh;
-    const Vec3 apex(0.0f, 0.5f, 0.0f);
-    for (int segment = 0; segment < segments; ++segment) {
-        const float theta0 =
-            static_cast<float>(segment) / static_cast<float>(segments) * 6.28318531f;
-        const float theta1 =
-            static_cast<float>(segment + 1) / static_cast<float>(segments) * 6.28318531f;
-        const Vec3 p0(std::cos(theta0) * 0.5f, -0.5f, std::sin(theta0) * 0.5f);
-        const Vec3 p1(std::cos(theta1) * 0.5f, -0.5f, std::sin(theta1) * 0.5f);
-        const Vec3 sideNormal = Normalize(Cross(p1 - p0, apex - p0));
-        const Vec3 mid = (p0 + p1) * 0.5f;
-        const Vec3 outward = Normalize(Vec3(mid.x, 0.0f, mid.z));
-        const Vec3 normal = Dot(sideNormal, outward) < 0.0f ? -sideNormal : sideNormal;
-        const auto base = static_cast<unsigned int>(mesh.vertices.size());
-        mesh.vertices.push_back({apex, Normalize(normal + Vec3(0.0f, 0.4f, 0.0f))});
-        mesh.vertices.push_back({p0, normal});
-        mesh.vertices.push_back({p1, normal});
-        mesh.indices.insert(mesh.indices.end(), {base, base + 2, base + 1});
-    }
-    const Vec3 down(0.0f, -1.0f, 0.0f);
-    const auto center = static_cast<unsigned int>(mesh.vertices.size());
-    mesh.vertices.push_back({Vec3(0.0f, -0.5f, 0.0f), down});
-    for (int segment = 0; segment <= segments; ++segment) {
-        const float theta = static_cast<float>(segment) / static_cast<float>(segments) *
-                            6.28318531f;
-        mesh.vertices.push_back({Vec3(std::cos(theta) * 0.5f, -0.5f, std::sin(theta) * 0.5f), down});
-    }
-    for (int segment = 0; segment < segments; ++segment) {
-        const auto a = center + 1 + static_cast<unsigned int>(segment);
-        mesh.indices.insert(mesh.indices.end(), {center, a, a + 1});
-    }
-    return mesh;
-}
-
-MeshData BuildPlane(int divisions = 8) {
-    MeshData mesh;
-    const Vec3 up(0.0f, 1.0f, 0.0f);
-    for (int z = 0; z <= divisions; ++z) {
-        for (int x = 0; x <= divisions; ++x) {
-            const float fx = static_cast<float>(x) / static_cast<float>(divisions) - 0.5f;
-            const float fz = static_cast<float>(z) / static_cast<float>(divisions) - 0.5f;
-            mesh.vertices.push_back({Vec3(fx, 0.0f, fz), up});
-        }
-    }
-    const int stride = divisions + 1;
-    for (int z = 0; z < divisions; ++z) {
-        for (int x = 0; x < divisions; ++x) {
-            const auto a = static_cast<unsigned int>(z * stride + x);
-            const auto b = a + 1;
-            const auto c = a + static_cast<unsigned int>(stride) + 1;
-            const auto d = a + static_cast<unsigned int>(stride);
-            mesh.indices.insert(mesh.indices.end(), {a, c, b, a, d, c});
-        }
-    }
-    return mesh;
-}
-
-const MeshData& MeshFor(MeshShape shape) {
-    static const MeshData cube = BuildCube();
-    static const MeshData sphere = BuildSphere();
-    static const MeshData cylinder = BuildCylinder();
-    static const MeshData cone = BuildCone();
-    static const MeshData plane = BuildPlane();
-    switch (shape) {
-        case MeshShape::Sphere:
-            return sphere;
-        case MeshShape::Cylinder:
-            return cylinder;
-        case MeshShape::Cone:
-            return cone;
-        case MeshShape::Plane:
-            return plane;
-        case MeshShape::Cube:
-        default:
-            return cube;
-    }
+const scene::MeshAsset* MeshFor(const Entity& entity, const scene::Scene& scene) {
+    if (entity.mesh.shape == MeshShape::Custom) return scene.Mesh(entity.mesh.meshId);
+    return &asset::Primitive(entity.mesh.shape);
 }
 
 // ---------------------------------------------------------------------------
@@ -331,6 +158,8 @@ struct Environment {
     Vec3 ambientGround{0.10f, 0.11f, 0.14f};
     float fog = 0.18f;
     float exposure = 1.0f;
+    float cloudCover = 0.35f;
+    float rain = 0.0f;
     Vec3 fogColor{0.13f, 0.15f, 0.20f};
 };
 
@@ -343,6 +172,8 @@ Environment ReadEnvironment(const scene::Scene& scene) {
                                               -std::fabs(entity.atmosphere.sunDirection.y),
                                               entity.atmosphere.sunDirection.z));
             env.fog = entity.atmosphere.fogDensity;
+            env.cloudCover = Clamp01(entity.atmosphere.cloudCover);
+            env.rain = Clamp01(entity.atmosphere.rainIntensity);
             env.exposure = std::max(0.2f, entity.atmosphere.exposure);
             env.ambientSky = env.ambientSky * (0.6f + entity.atmosphere.cloudCover * 0.8f);
             env.fogColor = Lerp(Vec3(0.09f, 0.10f, 0.14f), Vec3(0.20f, 0.22f, 0.29f),
@@ -363,6 +194,21 @@ Environment ReadEnvironment(const scene::Scene& scene) {
     return env;
 }
 
+float Hash01(int index, int salt) {
+    return image::HashNoise(index * 7 + salt * 131, index * 13 + salt, 917u);
+}
+
+// Directional specular lobe. Roughness widens the highlight, metallic tints it with the
+// albedo - enough to read as "metal" without a BRDF LUT.
+Vec3 Specular(const Vec3& albedo, const Vec3& normal, const Vec3& viewDirection,
+              const Environment& env, float roughness, float metallic) {
+    const Vec3 halfVector = Normalize(viewDirection + (-env.sunDirection));
+    const float shininess = 2.0f / std::max(0.04f, roughness * roughness) - 2.0f;
+    const float highlight = std::pow(std::max(0.0f, Dot(normal, halfVector)), std::max(1.0f, shininess));
+    const Vec3 tint = Lerp(Vec3(1.0f, 1.0f, 1.0f), albedo, Clamp01(metallic));
+    return env.sunColor * (tint * (highlight * (0.5f + metallic * 1.5f) * env.sunIntensity * 0.25f));
+}
+
 Vec3 ShadeColor(const Vec3& albedo, const Vec3& normal, const Vec3& viewDirection,
                 const Environment& env, float distance) {
     const float lambert = std::max(0.0f, Dot(normal, -env.sunDirection));
@@ -378,6 +224,235 @@ Vec3 ShadeColor(const Vec3& albedo, const Vec3& normal, const Vec3& viewDirectio
     const float fogAmount = std::min(1.0f, (distance * env.fog) / 90.0f);
     lit = Lerp(lit, env.fogColor, fogAmount * 0.85f);
     return lit * env.exposure;
+}
+
+// ---------------------------------------------------------------------------
+// Materials: a tiny shader library evaluated per vertex. Same inputs the GPU path will get
+// later (albedo, uv, normal, view direction, time), so the script API and the Details panel
+// already describe the final look.
+// ---------------------------------------------------------------------------
+Vec3 PatternColor(const scene::MaterialComponent& material, float u, float v, float time) {
+    const float scale = std::max(0.01f, material.uvScale);
+    switch (material.shader) {
+        case scene::MaterialShader::Checker: {
+            const int cell = static_cast<int>(std::floor(u * scale)) +
+                             static_cast<int>(std::floor(v * scale));
+            return (cell % 2 == 0) ? material.baseColor : material.accentColor;
+        }
+        case scene::MaterialShader::Stripes: {
+            const float wave = std::sin(v * scale * 3.14159265f * 2.0f) * 0.5f + 0.5f;
+            return Lerp(material.accentColor, material.baseColor, wave);
+        }
+        case scene::MaterialShader::Noise: {
+            const float n = image::FractalNoise2D(u * scale, v * scale, 4, 4242u);
+            return Lerp(material.accentColor, material.baseColor, n);
+        }
+        case scene::MaterialShader::Gradient:
+            return Lerp(material.accentColor, material.baseColor, Clamp01(v));
+        case scene::MaterialShader::Hologram: {
+            const float scan = std::sin((v * scale - time * 0.6f) * 40.0f) * 0.5f + 0.5f;
+            return Lerp(material.accentColor, material.baseColor, 0.25f + scan * 0.35f);
+        }
+        case scene::MaterialShader::Emissive:
+        case scene::MaterialShader::Unlit:
+        case scene::MaterialShader::Lit:
+        default:
+            return material.baseColor;
+    }
+}
+
+Vec3 ShadeSurface(const Entity& entity, const Vec3& fallbackAlbedo, const Vec3& normal,
+                  const Vec3& viewDirection, float u, float v, const Environment& env,
+                  float distance, float time) {
+    const scene::MaterialComponent* material =
+        entity.Has(Component::Material) ? &entity.material : nullptr;
+    if (!material) return ShadeColor(fallbackAlbedo, normal, viewDirection, env, distance);
+
+    const Vec3 albedo = PatternColor(*material, u, v, time);
+    const float emissive = Clamp01(material->emissive);
+
+    switch (material->shader) {
+        case scene::MaterialShader::Unlit:
+            return Lerp(albedo, albedo * 1.6f, emissive) * env.exposure;
+        case scene::MaterialShader::Emissive:
+            return (albedo * (1.2f + emissive * 2.0f)) * env.exposure;
+        case scene::MaterialShader::Hologram: {
+            const float fresnel =
+                std::pow(1.0f - std::fabs(Dot(normal, viewDirection)),
+                         std::max(0.5f, material->fresnelPower));
+            const Vec3 glow = material->baseColor * (fresnel * 1.4f + emissive * 0.8f);
+            return (glow + albedo * 0.25f) * env.exposure;
+        }
+        case scene::MaterialShader::Lit:
+        case scene::MaterialShader::Checker:
+        case scene::MaterialShader::Stripes:
+        case scene::MaterialShader::Noise:
+        case scene::MaterialShader::Gradient:
+        default: {
+            // Diffuse is scaled back for metals; specular carries the rest.
+            const float diffuseScale = 1.0f - Clamp01(material->metallic) * 0.75f;
+            Vec3 lit = ShadeColor(albedo * diffuseScale, normal, viewDirection, env, distance);
+            lit = lit + Specular(albedo, normal, viewDirection, env, material->roughness,
+                                 material->metallic);
+            lit = lit + albedo * (emissive * 1.6f);
+            return lit;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Particles: stateless by design. Every particle's state is a pure function of the emitter,
+// its index and the clock, so playback is deterministic and the ray tracer can evaluate the
+// same field without owning simulation state.
+// ---------------------------------------------------------------------------
+int DrawParticles(ImDrawList* dl, const Projector& projector, const Rect& rect,
+                  const Entity& entity, const Environment& env, float time) {
+    const scene::ParticleComponent& p = entity.particles;
+    const int count = std::clamp(static_cast<int>(p.rate * p.lifetime), 0, 900);
+    if (count == 0) return 0;
+
+    const Vec3 origin = entity.transform.position;
+    int drawn = 0;
+
+    for (int i = 0; i < count; ++i) {
+        const float life = std::max(0.05f, p.lifetime);
+        const float birth = static_cast<float>(i) / std::max(1.0f, p.rate);
+        const float age = std::fmod(birth + time, life);
+        const float t = age / life;
+
+        const float h1 = Hash01(i, 1);
+        const float h2 = Hash01(i, 2);
+        const float h3 = Hash01(i, 3);
+        const float theta = h1 * 6.28318531f;
+        const float phi = (h2 - 0.5f) * 3.14159265f * p.spread;
+        const Vec3 direction(std::cos(theta) * std::cos(phi), std::sin(phi) + 0.35f,
+                             std::sin(theta) * std::cos(phi));
+        const Vec3 spawnOffset(std::cos(theta) * p.emitRadius * std::sqrt(h3), 0.0f,
+                               std::sin(theta) * p.emitRadius * std::sqrt(h3));
+
+        const Vec3 position = origin + spawnOffset + direction * (p.speed * age) +
+                              Vec3(0.0f, 0.5f * p.gravity * age * age, 0.0f);
+        const Vec3 view = projector.ToView(position);
+        if (view.z < projector.nearZ) continue;
+        const ImVec2 screen = projector.ProjectView(view);
+        if (!rect.Contains(screen)) continue;
+
+        const float size = p.startSize + (p.endSize - p.startSize) * t;
+        const float pixels = projector.focal * size / std::max(0.1f, view.z);
+        if (pixels < 0.6f) continue;
+
+        const Vec3 color = Lerp(p.color, p.colorEnd, t);
+        const float fade = p.looping ? (1.0f - t) : 1.0f;
+        float alpha = p.opacity * fade;
+        // Distance fog also eats particles, so emitters far away do not look pasted on.
+        alpha *= 1.0f - Clamp01(view.z * env.fog / 120.0f);
+        if (alpha <= 0.01f) continue;
+
+        dl->AddCircleFilled(screen, std::min(pixels, 64.0f), WithAlpha(ToColor(color), alpha), 10);
+        if (p.additive && pixels > 2.0f) {
+            dl->AddCircleFilled(screen, std::min(pixels * 0.45f, 24.0f),
+                                WithAlpha(ToColor(color), alpha * 0.6f), 8);
+        }
+        ++drawn;
+    }
+    return drawn;
+}
+
+// ---------------------------------------------------------------------------
+// Volumetrics: a procedural cloud deck that parallaxes with the camera, sun shafts through
+// the cloud cover, and a height-fog veil that grounds distant geometry in the horizon.
+// ---------------------------------------------------------------------------
+void DrawCloudDeck(ImDrawList* dl, const Projector& projector, const Rect& rect,
+                   const Environment& env, float time) {
+    const int puffs = 12 + static_cast<int>(env.cloudCover * 26.0f);
+    const ImU32 lit = Mix(kSkyHorizon, IM_COL32(232, 236, 248, 255), 0.75f);
+    const ImU32 shadowed = Mix(kSkyHorizon, IM_COL32(24, 28, 40, 255), 0.55f);
+    const float drift = time * 0.004f;
+
+    for (int i = 0; i < puffs; ++i) {
+        const float h = Hash01(i, 11);
+        const float h2 = Hash01(i, 23);
+        const float azimuth = (static_cast<float>(i) * 2.39996f + drift) ;
+        const float distance = 900.0f + h2 * 1500.0f;
+        const float height = 210.0f + h * 260.0f + env.cloudCover * 120.0f;
+
+        const Vec3 point = projector.eye + Vec3(std::cos(azimuth) * distance, height,
+                                                std::sin(azimuth) * distance);
+        const Vec3 view = projector.ToView(point);
+        if (view.z < 40.0f) continue;
+        const ImVec2 screen = projector.ProjectView(view);
+        if (screen.x < rect.min.x - 200.0f || screen.x > rect.max.x + 200.0f) continue;
+        if (screen.y > rect.max.y + 80.0f || screen.y < rect.min.y - rect.max.y) continue;
+
+        const float radius = projector.focal * (170.0f + h2 * 180.0f) / view.z;
+        if (radius < 3.0f) continue;
+        const float alpha = (0.06f + env.cloudCover * 0.16f) *
+                            Clamp01(1.0f - std::fabs(screen.y - rect.min.y - rect.Height() * 0.22f) /
+                                              (rect.Height() * 1.1f));
+        if (alpha <= 0.004f) continue;
+
+        dl->AddEllipseFilled(ImVec2(screen.x, screen.y), ImVec2(radius, radius * 0.42f),
+                             WithAlpha(shadowed, alpha * 0.85f), 0.0f, 20);
+        dl->AddEllipseFilled(ImVec2(screen.x - radius * 0.18f, screen.y - radius * 0.12f),
+                             ImVec2(radius * 0.78f, radius * 0.34f), WithAlpha(lit, alpha),
+                             0.0f, 18);
+        dl->AddEllipseFilled(ImVec2(screen.x + radius * 0.3f, screen.y + radius * 0.05f),
+                             ImVec2(radius * 0.5f, radius * 0.24f),
+                             WithAlpha(Mix(lit, shadowed, 0.35f), alpha * 0.7f), 0.0f, 16);
+    }
+}
+
+void DrawVolumetrics(ImDrawList* dl, const Projector& projector, const Rect& rect,
+                     const Environment& env, float horizonY, float time) {
+    const float width = rect.Width();
+    const float height = rect.Height();
+
+    // Sun disc + light shafts. The sun sits opposite the light's travel direction.
+    const Vec3 sunWorld = projector.eye - env.sunDirection * 4200.0f;
+    const Vec3 sunView = projector.ToView(sunWorld);
+    if (sunView.z > projector.nearZ) {
+        const ImVec2 sun = projector.ProjectView(sunView);
+        const bool onScreen = sun.x > rect.min.x - width * 0.6f && sun.x < rect.max.x + width * 0.6f &&
+                              sun.y > rect.min.y - height * 0.6f && sun.y < rect.max.y + height * 0.6f;
+        if (onScreen) {
+            const float glowAlpha = 0.10f + env.cloudCover * 0.10f;
+            dl->AddCircleFilled(sun, std::max(18.0f, height * 0.06f),
+                                WithAlpha(ToColor(env.sunColor), glowAlpha * 0.6f), 28);
+            dl->AddCircleFilled(sun, std::max(7.0f, height * 0.018f),
+                                WithAlpha(ToColor(env.sunColor), glowAlpha * 1.6f), 20);
+
+            const int shafts = 26;
+            const float spread = 3.14159265f * 1.15f;
+            for (int i = 0; i < shafts; ++i) {
+                const float t = static_cast<float>(i) / static_cast<float>(shafts);
+                const float angle = -spread * 0.5f + spread * t + std::sin(time * 0.05f + t * 9.0f) * 0.02f;
+                const float length = height * (0.7f + Hash01(i, 5) * 0.9f);
+                const float shaftWidth = 6.0f + Hash01(i, 9) * 26.0f;
+                const ImVec2 dir(std::sin(angle), std::cos(angle));
+                const ImVec2 side(-dir.y, dir.x);
+                const float alpha = (0.010f + env.cloudCover * 0.03f) * (0.35f + Hash01(i, 13) * 0.65f);
+                dl->AddTriangleFilled(
+                    ImVec2(sun.x + side.x * shaftWidth, sun.y + side.y * shaftWidth),
+                    ImVec2(sun.x - side.x * shaftWidth, sun.y - side.y * shaftWidth),
+                    ImVec2(sun.x + dir.x * length - side.x * shaftWidth * 2.4f,
+                           sun.y + dir.y * length - side.y * shaftWidth * 2.4f),
+                    WithAlpha(ToColor(env.sunColor), alpha));
+            }
+        }
+    }
+
+    // Height fog: a soft veil hugging the horizon (per-vertex distance fog does the rest).
+    if (horizonY > rect.min.y && horizonY < rect.max.y + height) {
+        const float veil = Clamp01(env.fog * 1.6f) * 0.5f;
+        const float top = std::max(rect.min.y, horizonY - height * 0.22f);
+        const float bottom = std::min(rect.max.y, horizonY + height * 0.16f);
+        if (bottom > top) {
+            dl->AddRectFilledMultiColor(
+                ImVec2(rect.min.x, top), ImVec2(rect.max.x, bottom),
+                WithAlpha(ToColor(env.fogColor), 0.0f), WithAlpha(ToColor(env.fogColor), 0.0f),
+                WithAlpha(ToColor(env.fogColor), veil), WithAlpha(ToColor(env.fogColor), veil));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -486,6 +561,10 @@ bool ActorBounds(const Entity& entity, Vec3& center, Vec3& extents) {
     extents = Vec3(0.5f, 0.5f, 0.5f);
     if (entity.Has(Component::Mesh)) {
         extents = entity.transform.scale * (entity.mesh.size * 0.5f);
+        if (entity.mesh.shape == MeshShape::Custom) {
+            // Imported geometry is normalised, so the unit box above is already correct.
+            extents = entity.transform.scale * 0.5f;
+        }
         if (entity.mesh.shape == MeshShape::Plane) {
             extents.y = std::max(0.02f, entity.transform.scale.y * 0.01f);
         }
@@ -552,6 +631,10 @@ Stats Draw(ImDrawList* dl, const Rect& rect, const scene::Scene& scene, const Ca
                                 IM_COL32(120, 132, 168, 0), IM_COL32(120, 132, 168, 26),
                                 IM_COL32(120, 132, 168, 26));
 
+    if (options.showVolumetrics) {
+        DrawCloudDeck(dl, projector, rect, env, time);
+    }
+
     // ---- ground grid -------------------------------------------------------
     if (options.showGrid) {
         const int radius = 20;
@@ -597,24 +680,45 @@ Stats Draw(ImDrawList* dl, const Rect& rect, const scene::Scene& scene, const Ca
     }
 
     // ---- soft ground shadows ----------------------------------------------
+    // Sun elevation decides how far a shadow is thrown and how soft it reads: high sun =
+    // tight contact shadow, low sun = a long soft smear away from the light.
     if (options.showShadows) {
+        const Vec3 sunGround = Normalize(Vec3(-env.sunDirection.x, 0.0f, -env.sunDirection.z));
+        const float elevation = std::max(0.08f, -env.sunDirection.y);
+        const float stretch = std::clamp(1.0f / elevation, 1.0f, 3.5f);
+        const float sunFade = Clamp01(1.15f - elevation * 0.9f);
+
         for (const Entity& entity : scene.Entities()) {
             if (!entity.active || !entity.Has(Component::Mesh) || !entity.mesh.castShadows) continue;
             if (entity.mesh.shape == MeshShape::Plane) continue;
             Vec3 center, extents;
             ActorBounds(entity, center, extents);
             const float lift = std::max(0.0f, center.y - extents.y);
+            if (lift > 60.0f) continue;
+
             const Vec3 ground = center + Vec3(0.0f, -lift, 0.0f);
-            const float reach = 0.55f + lift * 0.10f;
-            const Vec3 view = projector.ToView(ground);
+            const float room = std::max(extents.x, extents.z);
+            const Vec3 seat = ground + sunGround * (lift * stretch * 0.9f + room * 0.25f);
+
+            const Vec3 view = projector.ToView(seat);
             if (view.z < projector.nearZ) continue;
             const ImVec2 position = projector.ProjectView(view);
-            const float radiusPx = projector.focal * (std::max(extents.x, extents.z) * 1.9f + reach) /
+            const float radiusPx = projector.focal * (room * 1.35f + lift * 0.12f) /
                                    std::max(view.z, 0.1f);
-            if (radiusPx < 1.5f || radiusPx > width * 0.9f) continue;
-            const float fade = std::max(0.0f, 0.34f - lift * 0.02f);
-            dl->AddEllipseFilled(position, ImVec2(radiusPx, radiusPx * 0.42f),
-                                 IM_COL32(0, 0, 0, static_cast<int>(fade * 255.0f)), 0.0f, 24);
+            if (radiusPx < 1.5f || radiusPx > width * 1.2f) continue;
+
+            const float contact = std::clamp(1.0f - lift * 0.05f, 0.15f, 1.0f);
+            const float coreAlpha = (0.26f + sunFade * 0.16f) * contact;
+            // Core + two soft rings: a cheap blurred shadow without a shadow map.
+            dl->AddEllipseFilled(position, ImVec2(radiusPx * 1.12f, radiusPx * 0.46f * stretch),
+                                 IM_COL32(0, 0, 0, static_cast<int>(coreAlpha * 0.45f * 255.0f)),
+                                 0.0f, 28);
+            dl->AddEllipseFilled(position, ImVec2(radiusPx * 0.92f, radiusPx * 0.36f * stretch),
+                                 IM_COL32(0, 0, 0, static_cast<int>(coreAlpha * 0.7f * 255.0f)),
+                                 0.0f, 26);
+            dl->AddEllipseFilled(position, ImVec2(radiusPx * 0.62f, radiusPx * 0.24f * stretch),
+                                 IM_COL32(0, 0, 0, static_cast<int>(coreAlpha * 255.0f)), 0.0f,
+                                 22);
         }
     }
 
@@ -634,7 +738,9 @@ Stats Draw(ImDrawList* dl, const Rect& rect, const scene::Scene& scene, const Ca
         if (!entity.active || !entity.Has(Component::Mesh) || !entity.mesh.visible) continue;
         ++stats.drawnActors;
 
-        const MeshData& mesh = MeshFor(entity.mesh.shape);
+        const scene::MeshAsset* meshPtr = MeshFor(entity, scene);
+        if (!meshPtr || meshPtr->Empty()) continue;
+        const scene::MeshAsset& mesh = *meshPtr;
         const Vec3 rotation = entity.transform.rotation;
         const Vec3 scale = entity.transform.scale * entity.mesh.size;
         const Vec3 position = entity.transform.position;
@@ -644,7 +750,7 @@ Stats Draw(ImDrawList* dl, const Rect& rect, const scene::Scene& scene, const Ca
         std::vector<Vec3> normals(mesh.vertices.size());
 
         for (std::size_t i = 0; i < mesh.vertices.size(); ++i) {
-            const MeshVertex& vertex = mesh.vertices[i];
+            const scene::MeshVertex& vertex = mesh.vertices[i];
             const Vec3 local = Vec3(vertex.position.x * scale.x, vertex.position.y * scale.y,
                                     vertex.position.z * scale.z);
             const Vec3 worldPos = RotateEuler(local, rotation) + position;
@@ -660,13 +766,22 @@ Stats Draw(ImDrawList* dl, const Rect& rect, const scene::Scene& scene, const Ca
             const float distance = Length(worldPos - eye);
             Vec3 color;
             if (options.mode == ViewMode::Unlit) {
-                color = entity.mesh.baseColor;
+                color = entity.Has(Component::Material) ? entity.material.baseColor
+                                                        : entity.mesh.baseColor;
             } else if (options.mode == ViewMode::Normals) {
                 color = Vec3(normal.x * 0.5f + 0.5f, normal.y * 0.5f + 0.5f, normal.z * 0.5f + 0.5f);
             } else {
-                color = ShadeColor(entity.mesh.baseColor, normal, viewDirection, env, distance);
+                color = ShadeSurface(entity, entity.mesh.baseColor, normal, viewDirection,
+                                     vertex.u, vertex.v, env, distance, time);
             }
-            out.color = ToColor(color);
+            float alpha = 1.0f;
+            if (entity.Has(Component::Material)) {
+                alpha = Clamp01(entity.material.opacity);
+                if (entity.material.shader == scene::MaterialShader::Hologram) {
+                    alpha *= 0.75f;
+                }
+            }
+            out.color = ToColor(color, alpha);
             world.push_back(out);
         }
 
@@ -732,7 +847,10 @@ Stats Draw(ImDrawList* dl, const Rect& rect, const scene::Scene& scene, const Ca
             for (std::size_t v = 1; v + 1 < polygon.size(); ++v) {
                 PushTri(triangles, polygon[0].screen, polygon[v].screen, polygon[v + 1].screen,
                         polygon[0].color, polygon[v].color, polygon[v + 1].color,
-                        (polygon[0].depth + polygon[v].depth + polygon[v + 1].depth) / 3.0f);
+                        // Sort by the farthest vertex, not the centroid: a large ground plane
+                        // has a near centroid but must still be painted behind everything, and
+                        // painter's-algorithm artifacts show up as geometry "cut off" by the floor.
+                        std::max({polygon[0].depth, polygon[v].depth, polygon[v + 1].depth}));
             }
         }
     }
@@ -750,6 +868,16 @@ Stats Draw(ImDrawList* dl, const Rect& rect, const scene::Scene& scene, const Ca
             dl->PrimVtx(tri.points[2], whiteUv, tri.colors[2]);
         }
         stats.triangles += static_cast<int>(triangles.size());
+    }
+
+    if (options.showVolumetrics) {
+        DrawVolumetrics(dl, projector, rect, env, horizonY, time);
+    }
+
+    // ---- particles ---------------------------------------------------------
+    for (const Entity& entity : scene.Entities()) {
+        if (!entity.active || !entity.Has(Component::Particles)) continue;
+        stats.particles += DrawParticles(dl, projector, rect, entity, env, time);
     }
 
     // ---- selection ---------------------------------------------------------

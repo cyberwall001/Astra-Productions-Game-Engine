@@ -8,13 +8,39 @@
 #include "astra/data/Json.h"
 
 namespace astra::scene {
+
+namespace {
+
+// Local vector helpers: the data layer stays free of the renderer's maths header.
+Vec3 VSub(const Vec3& a, const Vec3& b) { return Vec3(a.x - b.x, a.y - b.y, a.z - b.z); }
+Vec3 VAdd(const Vec3& a, const Vec3& b) { return Vec3(a.x + b.x, a.y + b.y, a.z + b.z); }
+
+Vec3 VCross(const Vec3& a, const Vec3& b) {
+    return Vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+}
+
+Vec3 VNormalize(const Vec3& a) {
+    const float length =
+        std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+    if (length < 1e-6f) return Vec3(0.0f, 1.0f, 0.0f);
+    return Vec3(a.x / length, a.y / length, a.z / length);
+}
+
+}  // namespace
 namespace {
 
 const char* const kStormPresets[] = {"Clear", "Shelf cloud", "Supercell", "Tornado",
                                      "Derecho", "Hail core"};
 constexpr int kStormPresetCount = static_cast<int>(sizeof(kStormPresets) / sizeof(kStormPresets[0]));
 
-const char* const kMeshShapes[] = {"Cube", "Sphere", "Cylinder", "Cone", "Plane"};
+const char* const kMeshShapes[] = {"Cube", "Sphere", "Cylinder", "Cone", "Plane", "Custom"};
+
+const char* const kMaterialShaders[] = {"Lit",   "Unlit",  "Checker", "Stripes",
+                                       "Noise", "Gradient", "Hologram", "Emissive"};
+
+const char* const kParticlePresets[] = {"Smoke", "Sparks", "Rain", "Dust", "Fire"};
+constexpr int kParticlePresetCount =
+    static_cast<int>(sizeof(kParticlePresets) / sizeof(kParticlePresets[0]));
 
 }  // namespace
 
@@ -27,6 +53,136 @@ const char* MeshShapeName(MeshShape shape) {
 const char* const* MeshShapeNames(int& count) {
     count = kMeshShapeCount;
     return kMeshShapes;
+}
+
+const char* MaterialShaderName(MaterialShader shader) {
+    const int index = static_cast<int>(shader);
+    if (index < 0 || index >= kMaterialShaderCount) return kMaterialShaders[0];
+    return kMaterialShaders[index];
+}
+
+const char* const* MaterialShaderNames(int& count) {
+    count = kMaterialShaderCount;
+    return kMaterialShaders;
+}
+
+const char* ParticlePresetName(ParticlePreset preset) {
+    const int index = static_cast<int>(preset);
+    if (index < 0 || index >= kParticlePresetCount) return kParticlePresets[0];
+    return kParticlePresets[index];
+}
+
+const char* const* ParticlePresetNames(int& count) {
+    count = kParticlePresetCount;
+    return kParticlePresets;
+}
+
+void ApplyParticlePreset(ParticleComponent& p) {
+    switch (p.preset) {
+        case ParticlePreset::Sparks:
+            p.rate = 90.0f; p.lifetime = 0.85f; p.startSize = 0.06f; p.endSize = 0.02f;
+            p.speed = 6.5f; p.gravity = -9.2f; p.spread = 1.0f;
+            p.color = Vec3(1.0f, 0.82f, 0.42f); p.colorEnd = Vec3(0.85f, 0.22f, 0.10f);
+            p.opacity = 0.9f; p.additive = true; p.emitRadius = 0.1f;
+            break;
+        case ParticlePreset::Rain:
+            p.rate = 320.0f; p.lifetime = 1.4f; p.startSize = 0.05f; p.endSize = 0.05f;
+            p.speed = 14.0f; p.gravity = -22.0f; p.spread = 0.25f;
+            p.color = Vec3(0.62f, 0.72f, 0.88f); p.colorEnd = Vec3(0.42f, 0.52f, 0.70f);
+            p.opacity = 0.45f; p.additive = false; p.emitRadius = 6.0f;
+            break;
+        case ParticlePreset::Dust:
+            p.rate = 26.0f; p.lifetime = 3.6f; p.startSize = 0.09f; p.endSize = 0.16f;
+            p.speed = 0.35f; p.gravity = 0.02f; p.spread = 0.9f;
+            p.color = Vec3(0.92f, 0.90f, 0.84f); p.colorEnd = Vec3(0.55f, 0.58f, 0.66f);
+            p.opacity = 0.30f; p.additive = false; p.emitRadius = 1.6f;
+            break;
+        case ParticlePreset::Fire:
+            p.rate = 120.0f; p.lifetime = 1.1f; p.startSize = 0.42f; p.endSize = 0.06f;
+            p.speed = 2.4f; p.gravity = 1.4f; p.spread = 0.5f;
+            p.color = Vec3(1.0f, 0.68f, 0.22f); p.colorEnd = Vec3(0.55f, 0.10f, 0.05f);
+            p.opacity = 0.75f; p.additive = true; p.emitRadius = 0.35f;
+            break;
+        case ParticlePreset::Smoke:
+        case ParticlePreset::Count:
+        default:
+            p.rate = 18.0f; p.lifetime = 4.2f; p.startSize = 0.5f; p.endSize = 2.2f;
+            p.speed = 0.9f; p.gravity = 0.5f; p.spread = 0.55f;
+            p.color = Vec3(0.60f, 0.62f, 0.68f); p.colorEnd = Vec3(0.22f, 0.24f, 0.30f);
+            p.opacity = 0.36f; p.additive = false; p.emitRadius = 0.6f;
+            break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MeshAsset
+// ---------------------------------------------------------------------------
+
+void MeshAsset::RecomputeNormals() {
+    for (auto& vertex : vertices) vertex.normal = Vec3(0.0f, 0.0f, 0.0f);
+    for (std::size_t i = 0; i + 2 < indices.size(); i += 3) {
+        const u32 i0 = indices[i];
+        const u32 i1 = indices[i + 1];
+        const u32 i2 = indices[i + 2];
+        if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size()) continue;
+        const Vec3 a = vertices[i0].position;
+        const Vec3 b = vertices[i1].position;
+        const Vec3 c = vertices[i2].position;
+        const Vec3 normal = VCross(VSub(b, a), VSub(c, a));
+        vertices[i0].normal = VAdd(vertices[i0].normal, normal);
+        vertices[i1].normal = VAdd(vertices[i1].normal, normal);
+        vertices[i2].normal = VAdd(vertices[i2].normal, normal);
+    }
+    for (auto& vertex : vertices) vertex.normal = VNormalize(vertex.normal);
+}
+
+void MeshAsset::Bounds(Vec3& outMin, Vec3& outMax) const {
+    if (vertices.empty()) {
+        outMin = Vec3(0.0f, 0.0f, 0.0f);
+        outMax = Vec3(0.0f, 0.0f, 0.0f);
+        return;
+    }
+    outMin = vertices[0].position;
+    outMax = vertices[0].position;
+    for (const auto& vertex : vertices) {
+        outMin.x = std::min(outMin.x, vertex.position.x);
+        outMin.y = std::min(outMin.y, vertex.position.y);
+        outMin.z = std::min(outMin.z, vertex.position.z);
+        outMax.x = std::max(outMax.x, vertex.position.x);
+        outMax.y = std::max(outMax.y, vertex.position.y);
+        outMax.z = std::max(outMax.z, vertex.position.z);
+    }
+}
+
+void MeshAsset::Transform(const Vec3& scale, const Vec3& translation) {
+    for (auto& vertex : vertices) {
+        vertex.position = Vec3(vertex.position.x * scale.x + translation.x,
+                               vertex.position.y * scale.y + translation.y,
+                               vertex.position.z * scale.z + translation.z);
+        vertex.normal = VNormalize(Vec3(vertex.normal.x / (scale.x == 0.0f ? 1.0f : scale.x),
+                                        vertex.normal.y / (scale.y == 0.0f ? 1.0f : scale.y),
+                                        vertex.normal.z / (scale.z == 0.0f ? 1.0f : scale.z)));
+    }
+}
+
+u32 Scene::AddMesh(MeshAsset asset) {
+    if (asset.Empty()) return 0;
+    for (auto& vertex : asset.vertices) vertex.normal = VNormalize(vertex.normal);
+    meshes_.push_back(std::move(asset));
+    dirty_ = true;
+    return static_cast<u32>(meshes_.size());  // 1-based
+}
+
+const MeshAsset* Scene::Mesh(u32 id) const {
+    if (id == 0 || id > meshes_.size()) return nullptr;
+    return &meshes_[id - 1];
+}
+
+u32 Scene::FindMesh(std::string_view name) const {
+    for (std::size_t i = 0; i < meshes_.size(); ++i) {
+        if (meshes_[i].name == name) return static_cast<u32>(i + 1);
+    }
+    return 0;
 }
 
 void ApplyStormPreset(WeatherComponent& weather) {
@@ -129,6 +285,7 @@ Scene::Scene() { SetName("Untitled Scene"); }
 
 void Scene::Clear() {
     entities_.clear();
+    meshes_.clear();
     nextId_ = 1;
     dirty_ = false;
 }
@@ -143,7 +300,7 @@ EntityId Scene::CreateEntity(std::string name, EntityId parent) {
     Entity entity;
     entity.name = std::move(name);
     entity.parent = parent;
-    entity.Add(Component::Transform | Component::Camera);
+    entity.Add(Component::Transform);
     const EntityId id = PushEntity(std::move(entity));
 
     if (parent != kInvalidEntity) {
@@ -311,7 +468,38 @@ std::string Scene::ToJson() const {
             mesh.Set("visible", json::Value(entity.mesh.visible));
             mesh.Set("shadows", json::Value(entity.mesh.castShadows));
             mesh.Set("twoSided", json::Value(entity.mesh.twoSided));
+            mesh.Set("meshId", json::Value(static_cast<long long>(entity.mesh.meshId)));
             item.Set("mesh", std::move(mesh));
+        }
+        if (entity.Has(Component::Material)) {
+            json::Value material = json::Value::MakeObject();
+            material.Set("shader", json::Value(MaterialShaderName(entity.material.shader)));
+            material.Set("base", Vec3ToJson(entity.material.baseColor));
+            material.Set("accent", Vec3ToJson(entity.material.accentColor));
+            material.Set("uvScale", json::Value(static_cast<double>(entity.material.uvScale)));
+            material.Set("roughness", json::Value(static_cast<double>(entity.material.roughness)));
+            material.Set("metallic", json::Value(static_cast<double>(entity.material.metallic)));
+            material.Set("emissive", json::Value(static_cast<double>(entity.material.emissive)));
+            material.Set("opacity", json::Value(static_cast<double>(entity.material.opacity)));
+            material.Set("fresnel", json::Value(static_cast<double>(entity.material.fresnelPower)));
+            item.Set("material", std::move(material));
+        }
+        if (entity.Has(Component::Particles)) {
+            json::Value particles = json::Value::MakeObject();
+            particles.Set("preset", json::Value(ParticlePresetName(entity.particles.preset)));
+            particles.Set("rate", json::Value(static_cast<double>(entity.particles.rate)));
+            particles.Set("lifetime", json::Value(static_cast<double>(entity.particles.lifetime)));
+            particles.Set("startSize", json::Value(static_cast<double>(entity.particles.startSize)));
+            particles.Set("endSize", json::Value(static_cast<double>(entity.particles.endSize)));
+            particles.Set("speed", json::Value(static_cast<double>(entity.particles.speed)));
+            particles.Set("gravity", json::Value(static_cast<double>(entity.particles.gravity)));
+            particles.Set("spread", json::Value(static_cast<double>(entity.particles.spread)));
+            particles.Set("color", Vec3ToJson(entity.particles.color));
+            particles.Set("colorEnd", Vec3ToJson(entity.particles.colorEnd));
+            particles.Set("opacity", json::Value(static_cast<double>(entity.particles.opacity)));
+            particles.Set("additive", json::Value(entity.particles.additive));
+            particles.Set("emitRadius", json::Value(static_cast<double>(entity.particles.emitRadius)));
+            item.Set("particles", std::move(particles));
         }
         if (entity.Has(Component::Weather)) {
             json::Value weather = json::Value::MakeObject();
@@ -355,6 +543,35 @@ std::string Scene::ToJson() const {
         list.Push(std::move(item));
     }
     root.Set("entities", std::move(list));
+
+    // Custom geometry lives beside the actors so a level is a single self-contained file.
+    if (!meshes_.empty()) {
+        json::Value library = json::Value::MakeArray();
+        for (const auto& asset : meshes_) {
+            json::Value entry = json::Value::MakeObject();
+            entry.Set("name", json::Value(asset.name));
+            entry.Set("albedo", Vec3ToJson(asset.albedo));
+            json::Value vertices = json::Value::MakeArray();
+            for (const auto& vertex : asset.vertices) {
+                vertices.Push(json::Value(static_cast<double>(vertex.position.x)));
+                vertices.Push(json::Value(static_cast<double>(vertex.position.y)));
+                vertices.Push(json::Value(static_cast<double>(vertex.position.z)));
+                vertices.Push(json::Value(static_cast<double>(vertex.normal.x)));
+                vertices.Push(json::Value(static_cast<double>(vertex.normal.y)));
+                vertices.Push(json::Value(static_cast<double>(vertex.normal.z)));
+                vertices.Push(json::Value(static_cast<double>(vertex.u)));
+                vertices.Push(json::Value(static_cast<double>(vertex.v)));
+            }
+            entry.Set("vertices", std::move(vertices));
+            json::Value indices = json::Value::MakeArray();
+            for (u32 index : asset.indices) {
+                indices.Push(json::Value(static_cast<long long>(index)));
+            }
+            entry.Set("indices", std::move(indices));
+            library.Push(std::move(entry));
+        }
+        root.Set("meshes", std::move(library));
+    }
     return root.Dump(true);
 }
 
@@ -372,6 +589,33 @@ bool Scene::FromJson(std::string_view text, std::string* error) {
 
     Clear();
     name_ = root["name"].AsString("Untitled Scene");
+
+    const json::Value& library = root["meshes"];
+    if (library.IsArray()) {
+        for (const auto& entry : library.Elements()) {
+            MeshAsset asset;
+            asset.name = entry["name"].AsString("Mesh");
+            asset.albedo = Vec3FromJson(entry["albedo"]);
+            const auto& vertices = entry["vertices"].Elements();
+            asset.vertices.reserve(vertices.size() / 8);
+            for (std::size_t i = 0; i + 7 < vertices.size(); i += 8) {
+                MeshVertex vertex;
+                vertex.position = Vec3(static_cast<float>(vertices[i].AsNumber()),
+                                       static_cast<float>(vertices[i + 1].AsNumber()),
+                                       static_cast<float>(vertices[i + 2].AsNumber()));
+                vertex.normal = Vec3(static_cast<float>(vertices[i + 3].AsNumber()),
+                                     static_cast<float>(vertices[i + 4].AsNumber()),
+                                     static_cast<float>(vertices[i + 5].AsNumber()));
+                vertex.u = static_cast<float>(vertices[i + 6].AsNumber());
+                vertex.v = static_cast<float>(vertices[i + 7].AsNumber());
+                asset.vertices.push_back(vertex);
+            }
+            for (const auto& index : entry["indices"].Elements()) {
+                asset.indices.push_back(static_cast<u32>(index.AsInt()));
+            }
+            if (!asset.Empty()) meshes_.push_back(std::move(asset));
+        }
+    }
 
     for (const auto& item : root["entities"].Elements()) {
         Entity entity;
@@ -401,6 +645,50 @@ bool Scene::FromJson(std::string_view text, std::string* error) {
             entity.mesh.visible = mesh["visible"].AsBool(true);
             entity.mesh.castShadows = mesh["shadows"].AsBool(true);
             entity.mesh.twoSided = mesh["twoSided"].AsBool(false);
+            entity.mesh.meshId = static_cast<u32>(mesh["meshId"].AsInt(0));
+        }
+
+        const json::Value& material = item["material"];
+        if (material.IsObject()) {
+            entity.Add(Component::Material);
+            const std::string shader = material["shader"].AsString("Lit");
+            for (int64_t i = 0; i < kMaterialShaderCount; ++i) {
+                if (str::EqualsIgnoreCase(shader, kMaterialShaders[i])) {
+                    entity.material.shader = static_cast<MaterialShader>(i);
+                }
+            }
+            entity.material.baseColor = Vec3FromJson(material["base"]);
+            entity.material.accentColor = Vec3FromJson(material["accent"]);
+            entity.material.uvScale = static_cast<float>(material["uvScale"].AsNumber(4.0));
+            entity.material.roughness = static_cast<float>(material["roughness"].AsNumber(0.45));
+            entity.material.metallic = static_cast<float>(material["metallic"].AsNumber(0.0));
+            entity.material.emissive = static_cast<float>(material["emissive"].AsNumber(0.0));
+            entity.material.opacity = static_cast<float>(material["opacity"].AsNumber(1.0));
+            entity.material.fresnelPower = static_cast<float>(material["fresnel"].AsNumber(3.0));
+        }
+
+        const json::Value& particles = item["particles"];
+        if (particles.IsObject()) {
+            entity.Add(Component::Particles);
+            const std::string preset = particles["preset"].AsString("Dust");
+            for (int64_t i = 0; i < kParticlePresetCount; ++i) {
+                if (str::EqualsIgnoreCase(preset, kParticlePresets[i])) {
+                    entity.particles.preset = static_cast<ParticlePreset>(i);
+                }
+            }
+            entity.particles.rate = static_cast<float>(particles["rate"].AsNumber(24.0));
+            entity.particles.lifetime = static_cast<float>(particles["lifetime"].AsNumber(2.4));
+            entity.particles.startSize = static_cast<float>(particles["startSize"].AsNumber(0.35));
+            entity.particles.endSize = static_cast<float>(particles["endSize"].AsNumber(0.9));
+            entity.particles.speed = static_cast<float>(particles["speed"].AsNumber(1.6));
+            entity.particles.gravity = static_cast<float>(particles["gravity"].AsNumber(-0.6));
+            entity.particles.spread = static_cast<float>(particles["spread"].AsNumber(0.6));
+            entity.particles.color = Vec3FromJson(particles["color"]);
+            entity.particles.colorEnd = Vec3FromJson(particles["colorEnd"]);
+            entity.particles.opacity = static_cast<float>(particles["opacity"].AsNumber(0.55));
+            entity.particles.additive = particles["additive"].AsBool(false);
+            entity.particles.emitRadius =
+                static_cast<float>(particles["emitRadius"].AsNumber(0.4));
         }
 
         const json::Value& weather = item["weather"];
@@ -471,7 +759,7 @@ Scene Scene::CreateEmptyScene(std::string name) {
     Scene scene;
     scene.SetName(std::move(name));
     scene.CreateEntity("Camera", kInvalidEntity);
-    scene.Entities().back().Add(Component::Light);
+    scene.Entities().back().Add(Component::Camera | Component::Light);
     scene.Entities().back().light.type = LightType::Directional;
     scene.dirty_ = false;
     return scene;
