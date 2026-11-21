@@ -28,6 +28,9 @@
 #include "astra/licensing/MasterKey.h"
 #include "astra/project/Project.h"
 #include "astra/scene/Reflection.h"
+#include "astra/render/Camera.h"
+#include "astra/render/ViewportRenderer.h"
+#include "astra/scene/Reflection.h"
 #include "astra/scene/Scene.h"
 
 namespace {
@@ -438,6 +441,173 @@ void TestScene() {
     }
 }
 
+void TestSampleLevel() {
+    astra::scene::Scene level = astra::scene::Scene::CreateSampleLevel("Level 01 - Sandbox");
+    CHECK(level.Name() == "Level 01 - Sandbox");
+    CHECK(level.Count() >= 10);
+
+    // The outliner groups mirror the Unreal default level.
+    for (const char* rootName : {"Lighting", "Geometry", "Gameplay", "Cameras"}) {
+        CHECK(level.FindByName(rootName) != nullptr);
+    }
+
+    astra::scene::Entity* cube = level.FindByName("Cube");
+    CHECK(cube != nullptr);
+    if (cube) {
+        CHECK(cube->Has(astra::scene::Component::Mesh));
+        CHECK_EQ(static_cast<int>(cube->mesh.shape),
+                 static_cast<int>(astra::scene::MeshShape::Cube));
+        CHECK(cube->mesh.visible);
+    }
+    CHECK(level.FindByName("Weather Volume") != nullptr);
+
+    // Meshes round trip through JSON with shape, size and colour intact.
+    astra::scene::Scene reloaded;
+    std::string error;
+    CHECK(reloaded.FromJson(level.ToJson(), &error));
+    if (!error.empty()) std::printf("  sample level error: %s\n", error.c_str());
+    const astra::scene::Entity* cubeCopy = reloaded.FindByName("Cube");
+    CHECK(cubeCopy != nullptr);
+    if (cube && cubeCopy) {
+        CHECK_EQ(static_cast<int>(cubeCopy->mesh.shape),
+                 static_cast<int>(cube->mesh.shape));
+        CHECK(cubeCopy->mesh.size.x == cube->mesh.size.x);
+        CHECK(cubeCopy->mesh.baseColor.y == cube->mesh.baseColor.y);
+    }
+
+    // The Details panel exposes the static mesh group for a mesh actor.
+    if (cube) {
+        bool sawMesh = false;
+        for (const auto& group : astra::scene::BuildInspectorModel(*cube)) {
+            if (group.title == "Static Mesh") sawMesh = true;
+        }
+        CHECK(sawMesh);
+    }
+
+    // Every shape has a display name for the enum picker.
+    int shapeCount = 0;
+    const char* const* shapeNames = astra::scene::MeshShapeNames(shapeCount);
+    CHECK(shapeCount >= 5);
+    CHECK(shapeNames != nullptr);
+    if (shapeNames) CHECK(shapeNames[0] != nullptr);
+
+    // The storm sample is still loadable - it is a template now, not the default.
+    astra::scene::Scene storm = astra::scene::Scene::CreateStormScene("Template - Storm");
+    CHECK(storm.Count() > 6);
+    CHECK(storm.FindByName("Supercell 03 / Mesocyclone") != nullptr);
+}
+
+void TestViewport() {
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(1280.0f, 720.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    io.Fonts->AddFontDefault();
+    unsigned char* pixels = nullptr;
+    int atlasWidth = 0;
+    int atlasHeight = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &atlasWidth, &atlasHeight);
+    io.Fonts->SetTexID(static_cast<ImTextureID>(1));
+    ImGui::NewFrame();
+
+    astra::scene::Scene level = astra::scene::Scene::CreateSampleLevel();
+    astra::render::Rect rect{ImVec2(0.0f, 0.0f), ImVec2(1280.0f, 720.0f)};
+    astra::render::Camera camera;
+    const astra::scene::Entity* cube = level.FindByName("Cube");
+    if (cube) camera.target = cube->transform.position;
+    camera.distance = 9.0f;
+
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const int verticesBefore = dl->VtxBuffer.Size;
+
+    astra::render::Options options;
+    const astra::render::Stats shaded = astra::render::Draw(
+        dl, rect, level, camera, options, astra::scene::kInvalidEntity, 0.0f);
+    CHECK(shaded.drawnActors >= 4);
+    CHECK(shaded.triangles > 100);
+    CHECK(dl->VtxBuffer.Size > verticesBefore);
+    CHECK(shaded.milliseconds >= 0.0f);
+
+    // Every view mode renders the same actors without NaNs or assertions.
+    for (astra::render::ViewMode mode :
+         {astra::render::ViewMode::Unlit, astra::render::ViewMode::Wireframe,
+          astra::render::ViewMode::Normals}) {
+        options.mode = mode;
+        const astra::render::Stats stats = astra::render::Draw(
+            dl, rect, level, camera, options, astra::scene::kInvalidEntity, 0.0f);
+        CHECK(stats.drawnActors == shaded.drawnActors);
+        CHECK(stats.triangles > 0);
+    }
+    options.mode = astra::render::ViewMode::Shaded;
+
+    // Picking the centre of a framed actor returns that actor.
+    if (cube) {
+        const astra::scene::EntityId hit =
+            astra::render::Pick(rect, level, camera, ImVec2(640.0f, 360.0f));
+        CHECK(hit == cube->id);
+        // Corners of the viewport are empty space.
+        CHECK(astra::render::Pick(rect, level, camera, ImVec2(6.0f, 6.0f)) ==
+              astra::scene::kInvalidEntity);
+    }
+
+    // Framing a selection keeps the camera finite and centred on the actor.
+    if (cube) {
+        astra::render::FrameSelection(camera, level, cube->id);
+        CHECK(camera.distance > 1.0f && camera.distance < 400.0f);
+        CHECK(camera.target.x == cube->transform.position.x);
+        CHECK(camera.target.z == cube->transform.position.z);
+    }
+
+    // An empty level draws only chrome - no crash, no geometry.
+    astra::scene::Scene empty;
+    const astra::render::Stats none = astra::render::Draw(
+        dl, rect, empty, camera, options, astra::scene::kInvalidEntity, 0.0f);
+    CHECK_EQ(none.drawnActors, 0);
+    CHECK_EQ(none.triangles, 0);
+
+    // Actor bounds include the mesh size, and roots without a mesh stay small.
+    if (cube) {
+        astra::scene::Vec3 center{}, extents{};
+        CHECK(astra::render::ActorBounds(*cube, center, extents));
+        CHECK(extents.x > 0.0f && extents.y > 0.0f && extents.z > 0.0f);
+    }
+
+    // Camera navigation stays inside its clamps so the orbit can never flip or tunnel.
+    astra::render::Camera nav;
+    nav.distance = 12.0f;
+    const float yawBefore = nav.yawDeg;
+    nav.Orbit(30.0f, 0.0f);
+    CHECK(nav.yawDeg != yawBefore);
+    nav.Orbit(0.0f, 10000.0f);
+    CHECK(nav.pitchDeg <= astra::render::Camera::kMaxPitch + 0.001f);
+    nav.Orbit(0.0f, -10000.0f);
+    CHECK(nav.pitchDeg >= astra::render::Camera::kMinPitch - 0.001f);
+    nav.Zoom(10000.0f);
+    CHECK(nav.distance >= astra::render::Camera::kMinDistance - 0.001f);
+    nav.Zoom(-10000.0f);
+    CHECK(nav.distance <= astra::render::Camera::kMaxDistance + 0.001f);
+    const astra::scene::Vec3 targetBefore = nav.target;
+    nav.Pan(40.0f, -20.0f, 720.0f);
+    CHECK(nav.target.x != targetBefore.x || nav.target.y != targetBefore.y ||
+          nav.target.z != targetBefore.z);
+    CHECK(std::isfinite(nav.Position().x) && std::isfinite(nav.Position().y) &&
+          std::isfinite(nav.Position().z));
+
+    // View mode names line up with the enum so the picker cannot drift.
+    int modeCount = 0;
+    const char* const* modeNames = astra::render::ViewModeNames(modeCount);
+    CHECK(modeCount >= 4);
+    CHECK(modeNames != nullptr);
+    if (modeNames) {
+        CHECK(std::strcmp(modeNames[static_cast<int>(astra::render::ViewMode::Shaded)],
+                          "Shaded") == 0);
+        CHECK(modeNames[static_cast<int>(astra::render::ViewMode::Wireframe)] != nullptr);
+    }
+
+    ImGui::EndFrame();
+    ImGui::DestroyContext();
+}
+
 void TestProjects() {
     using namespace astra::project;
     const std::string root = astra::paths::EnsureDataDir("tests/projects");
@@ -570,6 +740,8 @@ const TestCase kTests[] = {
     {"auth.accounts", TestAccounts},
     {"auth.registration", TestRegistrationFlow},
     {"scene.runtime", TestScene},
+    {"scene.sample_level", TestSampleLevel},
+    {"render.viewport", TestViewport},
     {"project.files", TestProjects},
     {"github.parsing", TestGitHubParsing},
     {"settings.roundtrip", TestSettingsRoundTrip},

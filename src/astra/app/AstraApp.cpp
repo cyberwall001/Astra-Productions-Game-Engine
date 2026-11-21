@@ -36,7 +36,7 @@ void AstraApp::Init(bool headlessMode) {
                                                                        : log::Level::Info);
 
     bootStageCount = static_cast<int>(boot::Stages().size());
-    editor.scene = scene::Scene::CreateStormScene();
+    editor.scene = scene::Scene::CreateSampleLevel();
     editor.selected = editor.scene.Roots().empty() ? scene::kInvalidEntity
                                                    : editor.scene.Roots().front();
     editor.frameHistory.reserve(120);
@@ -278,7 +278,7 @@ void AstraApp::OpenRepo(const github::Repo& repo) {
         info.defaultScene = "scenes/" + str::SanitizeFileName(repo.name) + ".astra.scene";
         project::Write(info);
 
-        scene::Scene starter = scene::Scene::CreateStormScene(repo.name);
+        scene::Scene starter = scene::Scene::CreateSampleLevel(repo.name);
         project::SaveScene(info, starter);
     }
 
@@ -295,7 +295,7 @@ void AstraApp::OpenProject(const project::ProjectInfo& info) {
     std::string error;
     if (!project::LoadScene(info, editor.scene, &error)) {
         log::Warn("project", error);
-        editor.scene = scene::Scene::CreateStormScene(info.name);
+        editor.scene = scene::Scene::CreateSampleLevel(info.name);
         project::SaveScene(info, editor.scene);
     }
     const auto roots = editor.scene.Roots();
@@ -344,7 +344,7 @@ void AstraApp::SaveScene() {
 
 void AstraApp::NewScene() {
     if (!editor.project.isValid()) return;
-    editor.scene = scene::Scene::CreateStormScene("New Scene");
+    editor.scene = scene::Scene::CreateSampleLevel("Untitled Level");
     editor.selected = editor.scene.Roots().empty() ? scene::kInvalidEntity
                                                    : editor.scene.Roots().front();
     editor.scene.MarkDirty();
@@ -352,7 +352,7 @@ void AstraApp::NewScene() {
 }
 
 void AstraApp::RefreshDemoContent() {
-    editor.scene = scene::Scene::CreateStormScene();
+    editor.scene = scene::Scene::CreateSampleLevel();
     editor.selected = editor.scene.Roots().empty() ? scene::kInvalidEntity
                                                    : editor.scene.Roots().front();
     SetFooterStatus("Sample scene rebuilt");

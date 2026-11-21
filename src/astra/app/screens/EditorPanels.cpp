@@ -12,6 +12,7 @@
 #include "astra/core/Log.h"
 #include "astra/core/Strings.h"
 #include "astra/core/Time.h"
+#include "astra/render/ViewportRenderer.h"
 #include "astra/scene/Reflection.h"
 #include "astra/ui/Widgets.h"
 #include "imgui_internal.h"
@@ -384,9 +385,9 @@ void Hierarchy(AstraApp& app, ImVec2 pos, ImVec2 size) {
     scene::Scene& scene = app.editor.scene;
     char badge[32];
     std::snprintf(badge, sizeof(badge), "%zu", scene.Count());
-    BeginPanel("##hierarchy_panel", "Hierarchy", ui::Icon::Layers, pos, size, badge);
+    BeginPanel("##hierarchy_panel", "World Outliner", ui::Icon::Layers, pos, size, badge);
 
-    const char* placeholder = "Filter entities";
+    const char* placeholder = "Search actors";
     app.editor.hierarchySearch.reserve(64);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::BeginChild("##hierarchy_list", ImVec2(0, ImGui::GetContentRegionAvail().y - U(38.0f)),
@@ -404,14 +405,14 @@ void Hierarchy(AstraApp& app, ImVec2 pos, ImVec2 size) {
         DrawEntityRow(app, scene, root, 0, rowWidth);
     }
     if (scene.Roots().empty()) {
-        ui::TextFaint("This scene is empty.");
+        ui::TextFaint("This level has no actors yet.");
     }
 
     ImGui::EndChild();
 
-    if (ui::GhostButton("Add entity", ImVec2(ImGui::GetContentRegionAvail().x, U(30.0f)), true,
+    if (ui::GhostButton("Add actor", ImVec2(ImGui::GetContentRegionAvail().x, U(30.0f)), true,
                         ui::Icon::Plus)) {
-        const EntityId created = scene.CreateEntity("New Entity");
+        const EntityId created = scene.CreateEntity("New Actor");
         app.editor.selected = created;
     }
 
@@ -420,13 +421,13 @@ void Hierarchy(AstraApp& app, ImVec2 pos, ImVec2 size) {
 
 void Inspector(AstraApp& app, ImVec2 pos, ImVec2 size) {
     scene::Scene& scene = app.editor.scene;
-    BeginPanel("##inspector_panel", "Inspector", ui::Icon::Sliders, pos, size);
+    BeginPanel("##details_panel", "Details", ui::Icon::Sliders, pos, size);
 
     scene::Entity* entity = scene.Find(app.editor.selected);
     if (!entity) {
         ui::VSpace(12.0f);
         ui::EmptyState(ui::Icon::Cube, "Nothing selected",
-                       "Pick an entity in the hierarchy to edit its components.");
+                       "Select an actor in the World Outliner to edit its components.");
         EndPanel();
         return;
     }
@@ -442,7 +443,7 @@ void Inspector(AstraApp& app, ImVec2 pos, ImVec2 size) {
     dl->AddText(Text().medium, Text().medium->FontSize, ImVec2(headerPos.x + U(36.0f), headerPos.y + U(7.0f)),
                 Colors().text, str::Ellipsis(entity->name, 22).c_str());
     dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(headerPos.x + U(36.0f), headerPos.y + U(26.0f)),
-                Colors().textFaint, str::Format("entity %u", entity->id).c_str());
+                Colors().textFaint, str::Format("actor %u", entity->id).c_str());
     ImGui::SetCursorScreenPos(ImVec2(headerPos.x + ImGui::GetContentRegionAvail().x - U(42.0f),
                                      headerPos.y + U(12.0f)));
     bool active = entity->active;
@@ -458,8 +459,10 @@ void Inspector(AstraApp& app, ImVec2 pos, ImVec2 size) {
         ImGui::PushStyleColor(ImGuiCol_Header, ui::ToVec4(Colors().surfaceSunken));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ui::ToVec4(Colors().surfaceHover));
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, ui::ToVec4(Colors().surfaceHover));
-        const bool open = ImGui::CollapsingHeader(group.title.c_str(),
-                                                  ImGuiTreeNodeFlags_DefaultOpen);
+        // Unreal keeps the Actor section folded; components open straight away.
+        ImGuiTreeNodeFlags headerFlags = 0;
+        if (group.title != "Actor") headerFlags |= ImGuiTreeNodeFlags_DefaultOpen;
+        const bool open = ImGui::CollapsingHeader(group.title.c_str(), headerFlags);
         ImGui::PopStyleColor(3);
         if (open) {
             ImGui::Indent(U(4.0f));
@@ -489,12 +492,16 @@ void Inspector(AstraApp& app, ImVec2 pos, ImVec2 size) {
     }
     ImGui::PopStyleColor();
     if (ImGui::BeginPopup("##add_component")) {
-        if (ImGui::MenuItem("Weather field", nullptr, false,
-                            !entity->Has(scene::Component::Weather))) {
-            scene.AddComponent(entity->id, scene::Component::Weather);
+        if (ImGui::MenuItem("Static mesh", nullptr, false,
+                            !entity->Has(scene::Component::Mesh))) {
+            scene.AddComponent(entity->id, scene::Component::Mesh);
         }
         if (ImGui::MenuItem("Light", nullptr, false, !entity->Has(scene::Component::Light))) {
             scene.AddComponent(entity->id, scene::Component::Light);
+        }
+        if (ImGui::MenuItem("Weather volume", nullptr, false,
+                            !entity->Has(scene::Component::Weather))) {
+            scene.AddComponent(entity->id, scene::Component::Weather);
         }
         if (ImGui::MenuItem("Camera", nullptr, false, !entity->Has(scene::Component::Camera))) {
             scene.AddComponent(entity->id, scene::Component::Camera);
@@ -509,95 +516,181 @@ void Inspector(AstraApp& app, ImVec2 pos, ImVec2 size) {
     EndPanel();
 }
 
+namespace {
+
+// The viewport owns click-vs-drag detection locally: a click selects, a drag orbits.
+ImVec2 gViewportPressPos(0.0f, 0.0f);
+bool gViewportPressed = false;
+
+const char* kEmptyLevelHint = "Empty level - add actors from the Content Browser";
+
+}  // namespace
+
 void Viewport(AstraApp& app, ImVec2 pos, ImVec2 size) {
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     ImDrawList* dl = window->DrawList;
 
-    dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), Colors().viewport, U(10.0f));
+    dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), Colors().editorPanel, U(10.0f));
     dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y), Colors().stroke, U(10.0f), 0, U(1.0f));
 
-    // Header.
+    // Header: the viewport reads like a render target, so the chrome stays minimal.
     const ImVec2 headerMax(pos.x + size.x, pos.y + U(kHeaderHeight));
     dl->AddRectFilled(pos, headerMax, Colors().editorHeader, U(10.0f), ImDrawFlags_RoundCornersTop);
-    dl->AddLine(ImVec2(pos.x, headerMax.y), ImVec2(headerMax.x, headerMax.y), Colors().stroke, U(1.0f));
+    dl->AddLine(ImVec2(pos.x, headerMax.y), ImVec2(headerMax.x, headerMax.y), Colors().stroke,
+                U(1.0f));
     ui::DrawIcon(dl, ui::Icon::Viewport, ImVec2(pos.x + U(15.0f), headerMax.y - U(15.0f)), U(13.0f),
                  Colors().textDim, U(1.5f));
     dl->AddText(Text().small, Text().small->FontSize, ImVec2(pos.x + U(28.0f), headerMax.y - U(21.0f)),
-                Colors().textDim, "Viewport");
-    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(headerMax.x - U(150.0f), headerMax.y - U(19.0f)),
-                Colors().textFaint, "Perspective  ·  Shaded  ·  0 draws");
+                Colors().textDim, "Level Viewport");
 
-    // Body.
+    const render::Stats& previous = app.editor.viewportStats;
+    const std::string readout =
+        str::Format("CPU raster  ·  %d actors  ·  %d tris", previous.actors, previous.triangles);
+    const float readoutWidth = Text().tiny->CalcTextSizeA(Text().tiny->FontSize, FLT_MAX, 0.0f,
+                                                          readout.c_str()).x;
+    dl->AddText(Text().tiny, Text().tiny->FontSize,
+                ImVec2(headerMax.x - U(14.0f) - readoutWidth, headerMax.y - U(19.0f)),
+                Colors().textFaint, readout.c_str());
+
     const ImVec2 bodyMin(pos.x + U(1.0f), headerMax.y + U(1.0f));
     const ImVec2 bodyMax(pos.x + size.x - U(1.0f), pos.y + size.y - U(1.0f));
-    dl->AddRectFilled(bodyMin, bodyMax, Colors().viewport, U(0.0f), ImDrawFlags_RoundCornersBottom);
-    ui::Grid(dl, bodyMin, bodyMax, U(38.0f), IM_COL32(255, 255, 255, 6));
-    // Horizon line.
-    dl->AddLine(ImVec2(bodyMin.x, (bodyMin.y + bodyMax.y) * 0.5f),
-                ImVec2(bodyMax.x, (bodyMin.y + bodyMax.y) * 0.5f), IM_COL32(255, 255, 255, 10), U(1.0f));
+    const render::Rect bodyRect{bodyMin, bodyMax};
+    app.editor.viewportMinX = bodyMin.x;
+    app.editor.viewportMinY = bodyMin.y;
+    app.editor.viewportMaxX = bodyMax.x;
+    app.editor.viewportMaxY = bodyMax.y;
 
-    const ImVec2 center((bodyMin.x + bodyMax.x) * 0.5f, (bodyMin.y + bodyMax.y) * 0.5f);
-    ui::RadialGlow(dl, center, (bodyMax.x - bodyMin.x) * 0.35f, Colors().brand, 0.22f);
+    dl->PushClipRect(bodyMin, bodyMax, true);
+    app.editor.viewportStats =
+        render::Draw(dl, bodyRect, app.editor.scene, app.editor.viewportCamera, app.editor.viewport,
+                     app.editor.selected, app.time);
+    dl->PopClipRect();
 
-    const float cardWidth = ImMin(U(430.0f), (bodyMax.x - bodyMin.x) - U(40.0f));
-    const float cardHeight = U(196.0f);
-    const ImVec2 cardMin(center.x - cardWidth * 0.5f, center.y - cardHeight * 0.5f);
-    const ImVec2 cardMax(cardMin.x + cardWidth, cardMin.y + cardHeight);
-    dl->AddRectFilled(cardMin, cardMax, ui::Fade(Colors().surface, 0.92f), U(14.0f));
-    dl->AddRect(cardMin, cardMax, ui::Fade(Colors().brand, 0.28f), U(14.0f), 0, U(1.0f));
+    // Input surface. Everything below draws on top of it, so the overlays win the hover test.
+    ImGui::SetCursorScreenPos(bodyMin);
+    ImGui::InvisibleButton("##viewport_input", ImVec2(bodyRect.Width(), bodyRect.Height()),
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
+                               ImGuiButtonFlags_MouseButtonMiddle);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool active = ImGui::IsItemActive();
+    app.editor.viewportFocus = hovered;
 
-    ui::BrandMark(dl, ImVec2(center.x, cardMin.y + U(46.0f)), U(24.0f), ui::Fade(Colors().brand, 0.9f),
-                  Colors().brandDeep, true, 0.0f);
+    ImGuiIO& io = ImGui::GetIO();
+    render::Camera& camera = app.editor.viewportCamera;
 
-    const char* title = "Renderer not connected";
-    const float titleWidth = Text().h3->CalcTextSizeA(Text().h3->FontSize, FLT_MAX, 0.0f, title).x;
-    dl->AddText(Text().h3, Text().h3->FontSize, ImVec2(center.x - titleWidth * 0.5f, cardMin.y + U(76.0f)),
-                Colors().text, title);
+    if (hovered && io.MouseWheel != 0.0f) camera.Zoom(io.MouseWheel);
+    if (active) {
+        // Unreal bindings: right drag looks around, middle drag pans, Alt+left does both
+        // for trackpads that have no middle button.
+        const bool orbit = ImGui::IsMouseDragging(ImGuiMouseButton_Right) ||
+                           (io.KeyAlt && ImGui::IsMouseDragging(ImGuiMouseButton_Left));
+        if (orbit) {
+            camera.Orbit(io.MouseDelta.x, io.MouseDelta.y);
+        } else if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+            camera.Pan(io.MouseDelta.x, io.MouseDelta.y, bodyRect.Height());
+        }
+    }
 
-    ImGui::SetCursorScreenPos(ImVec2(cardMin.x + U(24.0f), cardMin.y + U(110.0f)));
-    ImGui::PushTextWrapPos(ImGui::GetCursorScreenPos().x + cardWidth - U(48.0f));
-    ImGui::PushStyleColor(ImGuiCol_Text, ui::ToVec4(Colors().textDim));
-    ui::PushFont(Text().small);
-    ImGui::TextWrapped(
-        "This milestone ships the studio shell, scene data and weather tooling. The Vulkan/D3D12 "
-        "viewport pipeline arrives in engine 0.2 - scenes stay editable in the meantime.");
-    ui::PopFont();
-    ImGui::PopStyleColor();
-    ImGui::PopTextWrapPos();
+    if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        gViewportPressPos = io.MousePos;
+        gViewportPressed = true;
+    }
+    if (gViewportPressed && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+        gViewportPressed = false;
+        const float dx = io.MousePos.x - gViewportPressPos.x;
+        const float dy = io.MousePos.y - gViewportPressPos.y;
+        if (dx * dx + dy * dy < 16.0f && bodyRect.Contains(io.MousePos)) {
+            const scene::EntityId picked =
+                render::Pick(bodyRect, app.editor.scene, camera, io.MousePos);
+            app.editor.selected = picked;
+            if (picked != scene::kInvalidEntity) {
+                if (const scene::Entity* entity = app.editor.scene.Find(picked)) {
+                    app.SetFooterStatus("Selected " + entity->name);
+                }
+            }
+        }
+    }
+    if (hovered && !io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+        render::FrameSelection(camera, app.editor.scene, app.editor.selected);
+        app.SetFooterStatus("Framed the view");
+    }
 
-    ImGui::SetCursorScreenPos(ImVec2(cardMin.x + U(24.0f), cardMax.y - U(44.0f)));
-    if (ui::SecondaryButton("Open roadmap", ImVec2(U(132.0f), U(30.0f)), true, ui::Icon::Flag)) {
-        app.PushToast(ToastKind::Info, "Roadmap: engine 0.2", "Vulkan viewport, asset pipeline, replay.");
+    // ---- overlay toolbar ---------------------------------------------------
+    const ImVec2 toolbarMin(bodyMin.x + U(10.0f), bodyMin.y + U(10.0f));
+    const float pillWidth = U(96.0f) + U(4.0f) + U(30.0f) * 3.0f + U(8.0f) * 3.0f + U(16.0f);
+    dl->AddRectFilled(ImVec2(toolbarMin.x - U(8.0f), toolbarMin.y - U(6.0f)),
+                      ImVec2(toolbarMin.x + pillWidth, toolbarMin.y + U(34.0f)),
+                      ui::Fade(Colors().surfaceSunken, 0.86f), U(9.0f));
+    dl->AddRect(ImVec2(toolbarMin.x - U(8.0f), toolbarMin.y - U(6.0f)),
+                ImVec2(toolbarMin.x + pillWidth, toolbarMin.y + U(34.0f)), Colors().stroke, U(9.0f),
+                0, U(1.0f));
+
+    ImGui::SetCursorScreenPos(toolbarMin);
+    const std::string modeLabel = render::ViewModeName(app.editor.viewport.mode);
+    if (ui::SecondaryButton(modeLabel.c_str(), ImVec2(U(96.0f), U(28.0f)), true, ui::Icon::Eye)) {
+        ImGui::OpenPopup("##view_mode_popup");
+    }
+    if (ImGui::BeginPopup("##view_mode_popup")) {
+        int count = 0;
+        const char* const* names = render::ViewModeNames(count);
+        for (int i = 0; i < count; ++i) {
+            if (ImGui::MenuItem(names[i], nullptr, static_cast<int>(app.editor.viewport.mode) == i)) {
+                app.editor.viewport.mode = static_cast<render::ViewMode>(i);
+                app.SetFooterStatus(std::string("View mode: ") + names[i]);
+            }
+        }
+        ImGui::EndPopup();
     }
     ImGui::SameLine(0.0f, U(8.0f));
-    if (ui::GhostButton("Rebuild sample scene", ImVec2(U(172.0f), U(30.0f)), true, ui::Icon::Refresh)) {
-        app.RefreshDemoContent();
+    if (ui::IconButton("##vp_grid", ui::Icon::Grid, "World grid", app.editor.viewport.showGrid,
+                       30.0f)) {
+        app.editor.viewport.showGrid = !app.editor.viewport.showGrid;
+    }
+    ImGui::SameLine(0.0f, U(8.0f));
+    if (ui::IconButton("##vp_shadows", ui::Icon::Sun, "Ground shadows",
+                       app.editor.viewport.showShadows, 30.0f)) {
+        app.editor.viewport.showShadows = !app.editor.viewport.showShadows;
+    }
+    ImGui::SameLine(0.0f, U(8.0f));
+    if (ui::IconButton("##vp_gizmos", ui::Icon::Axis, "Selection gizmos",
+                       app.editor.viewport.showGizmos, 30.0f)) {
+        app.editor.viewport.showGizmos = !app.editor.viewport.showGizmos;
     }
 
-    // Corner overlays.
-    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(bodyMin.x + U(12.0f), bodyMin.y + U(10.0f)),
-                Colors().textFaint, "GIZMO: MOVE");
-    std::string sceneLabel = app.editor.scene.Name() + "  ·  " +
-                             std::to_string(app.editor.scene.Count()) + " entities";
+    // ---- corner overlays ---------------------------------------------------
+    const std::string footer = str::Format("Perspective  ·  %s  ·  %zu actors",
+                                           render::ViewModeName(app.editor.viewport.mode),
+                                           app.editor.scene.Count());
     dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(bodyMin.x + U(12.0f), bodyMax.y - U(20.0f)),
-                Colors().textFaint, sceneLabel.c_str());
+                ui::Fade(Colors().textDim, 0.9f), footer.c_str());
 
-    // Axis gizmo, bottom right.
-    const ImVec2 gizmo(bodyMax.x - U(52.0f), bodyMax.y - U(50.0f));
-    dl->AddCircleFilled(gizmo, U(26.0f), ui::Fade(Colors().surfaceSunken, 0.85f), 32);
-    dl->AddCircle(gizmo, U(26.0f), Colors().stroke, 32, U(1.0f));
-    dl->AddLine(gizmo, ImVec2(gizmo.x + U(16.0f), gizmo.y), IM_COL32(242, 100, 100, 255), U(1.8f));
-    dl->AddLine(gizmo, ImVec2(gizmo.x, gizmo.y - U(16.0f)), IM_COL32(120, 200, 140, 255), U(1.8f));
-    dl->AddLine(gizmo, ImVec2(gizmo.x - U(11.0f), gizmo.y + U(11.0f)), IM_COL32(110, 160, 230, 255),
+    if (app.editor.scene.Count() == 0) {
+        const float hintWidth = Text().small->CalcTextSizeA(Text().small->FontSize, FLT_MAX, 0.0f,
+                                                           kEmptyLevelHint).x;
+        dl->AddText(Text().small, Text().small->FontSize,
+                    ImVec2((bodyMin.x + bodyMax.x - hintWidth) * 0.5f,
+                           (bodyMin.y + bodyMax.y) * 0.5f),
+                    Colors().textFaint, kEmptyLevelHint);
+    }
+
+    // Axis triad, bottom right.
+    const ImVec2 gizmo(bodyMax.x - U(46.0f), bodyMax.y - U(46.0f));
+    dl->AddCircleFilled(gizmo, U(24.0f), ui::Fade(Colors().surfaceSunken, 0.8f), 32);
+    dl->AddCircle(gizmo, U(24.0f), Colors().stroke, 32, U(1.0f));
+    dl->AddLine(gizmo, ImVec2(gizmo.x + U(15.0f), gizmo.y), IM_COL32(242, 100, 100, 255), U(1.8f));
+    dl->AddLine(gizmo, ImVec2(gizmo.x, gizmo.y - U(15.0f)), IM_COL32(120, 200, 140, 255), U(1.8f));
+    dl->AddLine(gizmo, ImVec2(gizmo.x - U(10.0f), gizmo.y + U(10.0f)), IM_COL32(110, 160, 230, 255),
                 U(1.8f));
 
-    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(bodyMax.x - U(96.0f), bodyMax.y - U(86.0f)),
-                Colors().textFaint, "1920 x 1080");
+    const std::string resolution = str::Format("%.0f x %.0f", bodyRect.Width(), bodyRect.Height());
+    const float resolutionWidth = Text().tiny->CalcTextSizeA(Text().tiny->FontSize, FLT_MAX, 0.0f,
+                                                             resolution.c_str()).x;
+    dl->AddText(Text().tiny, Text().tiny->FontSize,
+                ImVec2(bodyMax.x - U(84.0f) - resolutionWidth, bodyMax.y - U(20.0f)),
+                Colors().textFaint, resolution.c_str());
 }
 
-void Console(AstraApp& app, ImVec2 pos, ImVec2 size) {
-    BeginPanel("##console_panel", "Output Log", ui::Icon::Terminal, pos, size);
-
+void ConsoleBody(AstraApp& app, ImVec2 pos, ImVec2 size) {
     static const char* kFilters[] = {"All", "Info", "Warnings", "Errors"};
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - U(2.0f));
     ui::Segmented("##console_filter", &app.editor.consoleFilter, kFilters, 4, U(240.0f));
@@ -612,7 +705,7 @@ void Console(AstraApp& app, ImVec2 pos, ImVec2 size) {
     }
 
     // The command row is anchored to the panel's bottom edge so it can never be clipped.
-    const float promptTop = pos.y + size.y - U(40.0f);
+    const float promptTop = pos.y + size.y - U(36.0f);
     const float logHeight = ImMax(U(30.0f), promptTop - ImGui::GetCursorScreenPos().y - U(6.0f));
     ImGui::BeginChild("##console_lines", ImVec2(0.0f, logHeight), ImGuiChildFlags_None,
                       ImGuiWindowFlags_None);
@@ -666,7 +759,7 @@ void Console(AstraApp& app, ImVec2 pos, ImVec2 size) {
     ImGui::EndChild();
 
     // Command line, pinned to the bottom of the panel.
-    ImGui::SetCursorScreenPos(ImVec2(pos.x + U(10.0f), promptTop + U(2.0f)));
+    ImGui::SetCursorScreenPos(ImVec2(pos.x + U(10.0f), promptTop + U(4.0f)));
     ImGui::PushStyleColor(ImGuiCol_Text, ui::ToVec4(Colors().brand));
     ui::PushFont(Text().monoSmall);
     const ImVec2 promptPos = ImGui::GetCursorScreenPos();
@@ -690,7 +783,11 @@ void Console(AstraApp& app, ImVec2 pos, ImVec2 size) {
     ImGui::PopStyleColor(2);
     ImGui::PopItemWidth();
     (void)promptPos;
+}
 
+void Console(AstraApp& app, ImVec2 pos, ImVec2 size) {
+    const PanelScope scope = BeginPanel("##console_panel", "Output Log", ui::Icon::Terminal, pos, size);
+    ConsoleBody(app, scope.contentPos, scope.contentSize);
     EndPanel();
 }
 
@@ -716,16 +813,274 @@ void Statistics(AstraApp& app, ImVec2 pos, ImVec2 size) {
     ImGui::SetCursorScreenPos(ImVec2(rowPos.x, rowPos.y + U(32.0f)));
 
     if (!history.empty()) {
+        // Green while a frame fits the 60 Hz budget, amber past it - the same signal the
+        // performance overlay in Unreal gives you at a glance.
+        const ImU32 sparkColor = average <= 17.0f ? Colors().success : Colors().warn;
         ui::Sparkline(history.data(), static_cast<int>(history.size()),
-                      ImVec2(ImGui::GetContentRegionAvail().x, U(46.0f)), Colors().brand);
+                      ImVec2(ImGui::GetContentRegionAvail().x, U(46.0f)), sparkColor);
         ui::VSpace(6.0f);
     }
 
-    ui::KeyValue("Entities", str::Format("%zu", app.editor.scene.Count()).c_str());
+    const render::Stats& viewport = app.editor.viewportStats;
+    ui::KeyValue("Actors", str::Format("%zu", app.editor.scene.Count()).c_str());
     ui::KeyValue("Active", str::Format("%zu", app.editor.scene.ActiveCount()).c_str());
-    ui::KeyValue("Renderer", "offline (milestone 1)", Colors().warn);
+    ui::KeyValue("Drawn", str::Format("%d", viewport.drawnActors).c_str());
+    ui::KeyValue("Triangles", str::Format("%d", viewport.triangles).c_str());
+    ui::KeyValue("Viewport", str::Format("%.1f ms", viewport.milliseconds).c_str(),
+                 Colors().success);
 
     EndPanel();
+}
+
+namespace {
+
+struct PlaceableAsset {
+    const char* name;
+    const char* kind;
+    ui::Icon icon;
+};
+
+const PlaceableAsset kAssets[] = {
+    {"Cube", "Static mesh", ui::Icon::Cube},
+    {"Sphere", "Static mesh", ui::Icon::Cube},
+    {"Cylinder", "Static mesh", ui::Icon::Cube},
+    {"Cone", "Static mesh", ui::Icon::Cube},
+    {"Floor", "Static mesh", ui::Icon::Grid},
+    {"Directional Light", "Light", ui::Icon::Sun},
+    {"Point Light", "Light", ui::Icon::Light},
+    {"Camera", "Camera", ui::Icon::Camera},
+    {"Player Start", "Gameplay", ui::Icon::Flag},
+    {"Weather Volume", "Simulation", ui::Icon::Cloud},
+};
+constexpr int kAssetCount = static_cast<int>(sizeof(kAssets) / sizeof(kAssets[0]));
+
+scene::Vec3 SnapLocation(const AstraApp& app, scene::Vec3 position) {
+    if (!app.editor.snapToGrid) return position;
+    const float step = 0.5f;
+    position.x = std::round(position.x / step) * step;
+    position.y = std::round(position.y / step) * step;
+    position.z = std::round(position.z / step) * step;
+    return position;
+}
+
+scene::EntityId SpawnPlaceable(AstraApp& app, int index) {
+    scene::Scene& scene = app.editor.scene;
+    if (index < 0 || index >= kAssetCount) return scene::kInvalidEntity;
+
+    const scene::Vec3 at =
+        SnapLocation(app, scene::Vec3(app.editor.viewportCamera.target.x, 0.0f,
+                                      app.editor.viewportCamera.target.z));
+    const std::string name = kAssets[index].name;
+    const scene::EntityId id = scene.CreateEntity(name);
+    scene::Entity* entity = scene.Find(id);
+    if (!entity) return id;
+
+    switch (index) {
+        case 0:  // Cube
+            entity->Add(scene::Component::Mesh);
+            entity->mesh.shape = scene::MeshShape::Cube;
+            entity->mesh.size = scene::Vec3(2.0f, 2.0f, 2.0f);
+            entity->mesh.baseColor = scene::Vec3(0.86f, 0.36f, 0.34f);
+            entity->transform.position = scene::Vec3(at.x, 1.0f, at.z);
+            break;
+        case 1:  // Sphere
+            entity->Add(scene::Component::Mesh);
+            entity->mesh.shape = scene::MeshShape::Sphere;
+            entity->mesh.size = scene::Vec3(2.0f, 2.0f, 2.0f);
+            entity->mesh.baseColor = scene::Vec3(0.55f, 0.66f, 0.92f);
+            entity->transform.position = scene::Vec3(at.x, 1.0f, at.z);
+            break;
+        case 2:  // Cylinder
+            entity->Add(scene::Component::Mesh);
+            entity->mesh.shape = scene::MeshShape::Cylinder;
+            entity->mesh.size = scene::Vec3(1.6f, 3.0f, 1.6f);
+            entity->mesh.baseColor = scene::Vec3(0.50f, 0.78f, 0.62f);
+            entity->transform.position = scene::Vec3(at.x, 1.5f, at.z);
+            break;
+        case 3:  // Cone
+            entity->Add(scene::Component::Mesh);
+            entity->mesh.shape = scene::MeshShape::Cone;
+            entity->mesh.size = scene::Vec3(1.6f, 2.6f, 1.6f);
+            entity->mesh.baseColor = scene::Vec3(0.90f, 0.74f, 0.38f);
+            entity->transform.position = scene::Vec3(at.x, 1.3f, at.z);
+            break;
+        case 4:  // Floor
+            entity->Add(scene::Component::Mesh);
+            entity->mesh.shape = scene::MeshShape::Plane;
+            entity->mesh.size = scene::Vec3(24.0f, 1.0f, 24.0f);
+            entity->mesh.baseColor = scene::Vec3(0.24f, 0.25f, 0.28f);
+            entity->transform.position = scene::Vec3(at.x, 0.0f, at.z);
+            entity->tag = "world";
+            break;
+        case 5:  // Directional Light
+            entity->Add(scene::Component::Light);
+            entity->light.type = scene::LightType::Directional;
+            entity->light.intensity = 2.6f;
+            entity->transform.position = scene::Vec3(at.x, 6.0f, at.z);
+            entity->transform.rotation = scene::Vec3(-48.0f, -34.0f, 0.0f);
+            break;
+        case 6:  // Point Light
+            entity->Add(scene::Component::Light);
+            entity->light.type = scene::LightType::Point;
+            entity->light.color = scene::Vec3(1.0f, 0.72f, 0.46f);
+            entity->light.intensity = 6.0f;
+            entity->transform.position = scene::Vec3(at.x, 2.4f, at.z);
+            break;
+        case 7:  // Camera
+            entity->Add(scene::Component::Camera);
+            entity->transform.position = scene::Vec3(at.x, 2.0f, at.z + 6.0f);
+            entity->transform.rotation = scene::Vec3(-10.0f, 180.0f, 0.0f);
+            break;
+        case 8:  // Player Start
+            entity->transform.position = scene::Vec3(at.x, 0.9f, at.z);
+            entity->tag = "gameplay";
+            break;
+        case 9:  // Weather Volume
+            entity->Add(scene::Component::Weather);
+            entity->transform.position = scene::Vec3(at.x, 0.0f, at.z);
+            entity->transform.scale = scene::Vec3(8.0f, 3.0f, 8.0f);
+            entity->tag = "simulation";
+            break;
+        default:
+            break;
+    }
+    return id;
+}
+
+}  // namespace
+
+void ContentBrowserBody(AstraApp& app) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ui::ToVec4(Colors().textFaint));
+    ui::PushFont(Text().tiny);
+    ImGui::TextUnformatted("Content  /  Level");
+    ui::PopFont();
+    ImGui::PopStyleColor();
+    ui::VSpace(6.0f);
+
+    const float tileWidth = U(104.0f);
+    const float tileHeight = U(88.0f);
+    const float gap = U(8.0f);
+    const float available = ImGui::GetContentRegionAvail().x;
+    const int columns =
+        ImMax(1, static_cast<int>((available + gap) / (tileWidth + gap)));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    for (int i = 0; i < kAssetCount; ++i) {
+        if (i > 0) {
+            if (i % columns != 0) {
+                ImGui::SameLine(0.0f, gap);
+            } else {
+                ui::VSpace(gap);
+            }
+        }
+        ImGui::PushID(i);
+        const ImVec2 tilePos = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton("##asset", ImVec2(tileWidth, tileHeight));
+        const bool hovered = ImGui::IsItemHovered();
+        if (ImGui::IsItemClicked()) {
+            const scene::EntityId created = SpawnPlaceable(app, i);
+            if (created != scene::kInvalidEntity) {
+                app.editor.selected = created;
+                app.SetFooterStatus(std::string("Added ") + kAssets[i].name + " to the level");
+            }
+        }
+
+        const ImVec2 tileMax(tilePos.x + tileWidth, tilePos.y + tileHeight);
+        dl->AddRectFilled(tilePos, tileMax,
+                          hovered ? Colors().surfaceHover : Colors().surfaceSunken, U(9.0f));
+        dl->AddRect(tilePos, tileMax, hovered ? ui::Fade(Colors().brand, 0.55f) : Colors().stroke,
+                    U(9.0f), 0, U(1.0f));
+
+        const ImVec2 iconCenter(tilePos.x + tileWidth * 0.5f, tilePos.y + U(30.0f));
+        dl->AddCircleFilled(iconCenter, U(17.0f), ui::Fade(Colors().brand, 0.12f), 24);
+        ui::DrawIcon(dl, kAssets[i].icon, iconCenter, U(15.0f),
+                     hovered ? Colors().brand : Colors().textDim, U(1.5f));
+
+        const ImVec2 nameSize = Text().small->CalcTextSizeA(Text().small->FontSize, FLT_MAX, 0.0f,
+                                                            kAssets[i].name);
+        dl->AddText(Text().small, Text().small->FontSize,
+                    ImVec2(tilePos.x + (tileWidth - nameSize.x) * 0.5f, tilePos.y + U(52.0f)),
+                    Colors().text, kAssets[i].name);
+        const ImVec2 kindSize = Text().tiny->CalcTextSizeA(Text().tiny->FontSize, FLT_MAX, 0.0f,
+                                                           kAssets[i].kind);
+        dl->AddText(Text().tiny, Text().tiny->FontSize,
+                    ImVec2(tilePos.x + (tileWidth - kindSize.x) * 0.5f, tilePos.y + U(70.0f)),
+                    Colors().textFaint, kAssets[i].kind);
+        ImGui::PopID();
+    }
+}
+
+void BottomPanel(AstraApp& app, ImVec2 pos, ImVec2 size) {
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    ImDrawList* dl = window->DrawList;
+
+    const ImVec2 max(pos.x + size.x, pos.y + size.y);
+    dl->AddRectFilled(pos, max, Colors().editorPanel, U(10.0f));
+    dl->AddRect(pos, max, Colors().stroke, U(10.0f), 0, U(1.0f));
+
+    const ImVec2 headerMax(max.x, pos.y + U(kHeaderHeight));
+    dl->AddRectFilled(pos, headerMax, Colors().editorHeader, U(10.0f), ImDrawFlags_RoundCornersTop);
+    dl->AddLine(ImVec2(pos.x, headerMax.y), ImVec2(headerMax.x, headerMax.y), Colors().stroke,
+                U(1.0f));
+
+    struct TabDef {
+        const char* label;
+        ui::Icon icon;
+    };
+    static const TabDef kTabs[] = {{"Content Browser", ui::Icon::Folder},
+                                   {"Output Log", ui::Icon::Terminal}};
+
+    float x = pos.x + U(8.0f);
+    for (int i = 0; i < 2; ++i) {
+        ImGui::PushID(i);
+        const bool active = app.editor.bottomTab == i;
+        const float labelWidth = Text().small->CalcTextSizeA(Text().small->FontSize, FLT_MAX, 0.0f,
+                                                             kTabs[i].label)
+                                     .x;
+        const float tabWidth = labelWidth + U(42.0f);
+        ImGui::SetCursorScreenPos(ImVec2(x, pos.y + U(4.0f)));
+        ImGui::InvisibleButton("##tab", ImVec2(tabWidth, U(kHeaderHeight) - U(6.0f)));
+        const bool hovered = ImGui::IsItemHovered();
+        if (ImGui::IsItemClicked()) app.editor.bottomTab = i;
+
+        ui::DrawIcon(dl, kTabs[i].icon, ImVec2(x + U(13.0f), pos.y + U(kHeaderHeight) * 0.5f),
+                     U(12.0f), active ? Colors().brand : Colors().textFaint, U(1.4f));
+        dl->AddText(Text().small, Text().small->FontSize,
+                    ImVec2(x + U(26.0f), pos.y + U(kHeaderHeight) * 0.5f - U(7.0f)),
+                    active ? Colors().text : (hovered ? Colors().textDim : Colors().textFaint),
+                    kTabs[i].label);
+        if (active) {
+            dl->AddRectFilled(ImVec2(x, headerMax.y - U(2.0f)),
+                              ImVec2(x + tabWidth - U(8.0f), headerMax.y), Colors().brand,
+                              U(1.0f));
+        }
+        ImGui::PopID();
+        x += tabWidth;
+    }
+
+    const std::string hint = app.editor.bottomTab == 0
+                                 ? "Click an asset to place it at the camera target"
+                                 : "Commands: help, clear, entities, save, weather, diag";
+    const float hintWidth = Text().tiny->CalcTextSizeA(Text().tiny->FontSize, FLT_MAX, 0.0f,
+                                                       hint.c_str()).x;
+    dl->AddText(Text().tiny, Text().tiny->FontSize,
+                ImVec2(max.x - U(14.0f) - hintWidth, pos.y + U(11.0f)), Colors().textFaint,
+                hint.c_str());
+
+    const ImVec2 contentPos(pos.x + U(1.0f), headerMax.y + U(1.0f));
+    const ImVec2 contentSize(size.x - U(2.0f), size.y - U(kHeaderHeight) - U(2.0f));
+    ImGui::SetCursorScreenPos(contentPos);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(U(10.0f), U(8.0f)));
+    ImGui::BeginChild("##bottom_content", contentSize, ImGuiChildFlags_None, ImGuiWindowFlags_None);
+    if (app.editor.bottomTab == 0) {
+        ContentBrowserBody(app);
+    } else {
+        ConsoleBody(app, contentPos, contentSize);
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
 }
 
 void ToolbarAction(AstraApp& app, const char* label, ui::Icon icon, const char* shortcut) {

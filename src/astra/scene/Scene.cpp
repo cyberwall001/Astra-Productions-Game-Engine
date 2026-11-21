@@ -14,7 +14,20 @@ const char* const kStormPresets[] = {"Clear", "Shelf cloud", "Supercell", "Torna
                                      "Derecho", "Hail core"};
 constexpr int kStormPresetCount = static_cast<int>(sizeof(kStormPresets) / sizeof(kStormPresets[0]));
 
+const char* const kMeshShapes[] = {"Cube", "Sphere", "Cylinder", "Cone", "Plane"};
+
 }  // namespace
+
+const char* MeshShapeName(MeshShape shape) {
+    const int index = static_cast<int>(shape);
+    if (index < 0 || index >= kMeshShapeCount) return kMeshShapes[0];
+    return kMeshShapes[index];
+}
+
+const char* const* MeshShapeNames(int& count) {
+    count = kMeshShapeCount;
+    return kMeshShapes;
+}
 
 void ApplyStormPreset(WeatherComponent& weather) {
     switch (weather.preset) {
@@ -290,6 +303,16 @@ std::string Scene::ToJson() const {
         transform.Set("scale", Vec3ToJson(entity.transform.scale));
         item.Set("transform", std::move(transform));
 
+        if (entity.Has(Component::Mesh)) {
+            json::Value mesh = json::Value::MakeObject();
+            mesh.Set("shape", json::Value(MeshShapeName(entity.mesh.shape)));
+            mesh.Set("size", Vec3ToJson(entity.mesh.size));
+            mesh.Set("color", Vec3ToJson(entity.mesh.baseColor));
+            mesh.Set("visible", json::Value(entity.mesh.visible));
+            mesh.Set("shadows", json::Value(entity.mesh.castShadows));
+            mesh.Set("twoSided", json::Value(entity.mesh.twoSided));
+            item.Set("mesh", std::move(mesh));
+        }
         if (entity.Has(Component::Weather)) {
             json::Value weather = json::Value::MakeObject();
             weather.Set("preset", json::Value(StormPresetName(entity.weather.preset)));
@@ -364,6 +387,22 @@ bool Scene::FromJson(std::string_view text, std::string* error) {
         entity.transform.rotation = Vec3FromJson(transform["rotation"]);
         entity.transform.scale = Vec3FromJson(transform["scale"]);
 
+        const json::Value& mesh = item["mesh"];
+        if (mesh.IsObject()) {
+            entity.Add(Component::Mesh);
+            const std::string shape = mesh["shape"].AsString("Cube");
+            for (int64_t i = 0; i < kMeshShapeCount; ++i) {
+                if (str::EqualsIgnoreCase(shape, kMeshShapes[i])) {
+                    entity.mesh.shape = static_cast<MeshShape>(i);
+                }
+            }
+            entity.mesh.size = Vec3FromJson(mesh["size"]);
+            entity.mesh.baseColor = Vec3FromJson(mesh["color"]);
+            entity.mesh.visible = mesh["visible"].AsBool(true);
+            entity.mesh.castShadows = mesh["shadows"].AsBool(true);
+            entity.mesh.twoSided = mesh["twoSided"].AsBool(false);
+        }
+
         const json::Value& weather = item["weather"];
         if (weather.IsObject()) {
             entity.Add(Component::Weather);
@@ -434,6 +473,95 @@ Scene Scene::CreateEmptyScene(std::string name) {
     scene.CreateEntity("Camera", kInvalidEntity);
     scene.Entities().back().Add(Component::Light);
     scene.Entities().back().light.type = LightType::Directional;
+    scene.dirty_ = false;
+    return scene;
+}
+
+Scene Scene::CreateSampleLevel(std::string name) {
+    Scene scene;
+    scene.SetName(std::move(name));
+
+    const EntityId lighting = scene.CreateEntity("Lighting");
+    scene.Find(lighting)->Add(Component::Atmosphere);
+
+    {
+        Entity* sun = scene.Find(scene.CreateEntity("Directional Light", lighting));
+        sun->Add(Component::Light);
+        sun->light.type = LightType::Directional;
+        sun->light.color = Vec3(1.0f, 0.94f, 0.86f);
+        sun->light.intensity = 2.6f;
+        sun->transform.rotation = Vec3(-48.0f, -34.0f, 0.0f);
+    }
+    {
+        Entity* sky = scene.Find(scene.CreateEntity("Sky Atmosphere", lighting));
+        sky->Add(Component::Atmosphere);
+        sky->atmosphere.fogDensity = 0.18f;
+        sky->atmosphere.cloudCover = 0.35f;
+        sky->atmosphere.rainIntensity = 0.0f;
+        sky->atmosphere.exposure = 1.0f;
+        sky->atmosphere.sunDirection = Vec3(-0.42f, -0.78f, 0.46f);
+    }
+
+    const EntityId geometry = scene.CreateEntity("Geometry");
+
+    {
+        Entity* cube = scene.Find(scene.CreateEntity("Cube", geometry));
+        cube->Add(Component::Mesh);
+        cube->mesh.shape = MeshShape::Cube;
+        cube->mesh.size = Vec3(2.0f, 2.0f, 2.0f);
+        cube->mesh.baseColor = Vec3(0.86f, 0.36f, 0.34f);
+        cube->transform.position = Vec3(-3.2f, 1.0f, 1.4f);
+        cube->transform.rotation = Vec3(0.0f, 24.0f, 0.0f);
+    }
+    {
+        Entity* sphere = scene.Find(scene.CreateEntity("Sphere", geometry));
+        sphere->Add(Component::Mesh);
+        sphere->mesh.shape = MeshShape::Sphere;
+        sphere->mesh.size = Vec3(2.2f, 2.2f, 2.2f);
+        sphere->mesh.baseColor = Vec3(0.55f, 0.66f, 0.92f);
+        sphere->transform.position = Vec3(0.4f, 1.1f, -0.6f);
+    }
+    {
+        Entity* cylinder = scene.Find(scene.CreateEntity("Cylinder", geometry));
+        cylinder->Add(Component::Mesh);
+        cylinder->mesh.shape = MeshShape::Cylinder;
+        cylinder->mesh.size = Vec3(1.6f, 3.0f, 1.6f);
+        cylinder->mesh.baseColor = Vec3(0.50f, 0.78f, 0.62f);
+        cylinder->transform.position = Vec3(3.6f, 1.5f, 1.0f);
+    }
+    {
+        Entity* cone = scene.Find(scene.CreateEntity("Cone", geometry));
+        cone->Add(Component::Mesh);
+        cone->mesh.shape = MeshShape::Cone;
+        cone->mesh.size = Vec3(1.4f, 2.4f, 1.4f);
+        cone->mesh.baseColor = Vec3(0.90f, 0.74f, 0.38f);
+        cone->transform.position = Vec3(3.2f, 1.2f, -3.0f);
+    }
+
+    const EntityId gameplay = scene.CreateEntity("Gameplay");
+    {
+        Entity* start = scene.Find(scene.CreateEntity("Player Start", gameplay));
+        start->transform.position = Vec3(0.0f, 0.9f, 6.0f);
+        start->tag = "gameplay";
+    }
+    {
+        Entity* volume = scene.Find(scene.CreateEntity("Weather Volume", gameplay));
+        volume->Add(Component::Weather);
+        volume->weather.preset = StormPreset::Supercell;
+        volume->transform.position = Vec3(-6.0f, 0.0f, -6.0f);
+        volume->transform.scale = Vec3(8.0f, 3.0f, 8.0f);
+        volume->tag = "simulation";
+    }
+
+    const EntityId cameras = scene.CreateEntity("Cameras");
+    {
+        Entity* camera = scene.Find(scene.CreateEntity("Camera Rig", cameras));
+        camera->Add(Component::Camera);
+        camera->camera.fieldOfViewDeg = 55.0f;
+        camera->transform.position = Vec3(-6.5f, 4.2f, 9.5f);
+        camera->transform.rotation = Vec3(-14.0f, -24.0f, 0.0f);
+    }
+
     scene.dirty_ = false;
     return scene;
 }

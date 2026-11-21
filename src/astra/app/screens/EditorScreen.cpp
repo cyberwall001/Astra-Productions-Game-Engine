@@ -6,7 +6,9 @@
 #include "astra/app/screens/EditorPanels.h"
 #include "astra/core/Strings.h"
 #include "astra/core/Time.h"
+#include "astra/core/Log.h"
 #include "astra/core/Version.h"
+#include "astra/render/ViewportRenderer.h"
 #include "astra/ui/Widgets.h"
 #include "imgui.h"
 
@@ -33,8 +35,8 @@ void MenuBar(AstraApp& app, ImVec2 min, float width) {
     struct MenuDef {
         const char* label;
     };
-    static const MenuDef kMenus[] = {{"File"}, {"Edit"}, {"Scene"}, {"Assets"},
-                                     {"Build"}, {"Window"}, {"Help"}};
+    static const MenuDef kMenus[] = {{"File"}, {"Edit"}, {"Window"}, {"Tools"},
+                                     {"Build"}, {"Help"}};
 
     float x = min.x + U(12.0f);
     for (const auto& menu : kMenus) {
@@ -76,7 +78,7 @@ void MenuBar(AstraApp& app, ImVec2 min, float width) {
                     app.showSettings = true;
                     app.settingsTab = 0;
                 }
-            } else if (label == "Scene") {
+            } else if (label == "Tools") {
                 if (ImGui::MenuItem("New scene")) app.NewScene();
                 if (ImGui::MenuItem("Rebuild sample scene")) app.RefreshDemoContent();
                 ImGui::Separator();
@@ -88,29 +90,31 @@ void MenuBar(AstraApp& app, ImVec2 min, float width) {
                     app.editor.scene.DestroyEntity(app.editor.selected);
                     app.editor.selected = scene::kInvalidEntity;
                 }
-            } else if (label == "Assets") {
+                ImGui::Separator();
                 if (ImGui::MenuItem("Import asset...")) {
-                    app.PushToast(ToastKind::Info, "Asset pipeline", "Import lands with engine 0.2.");
+                    app.PushToast(ToastKind::Info, "Asset import",
+                                  "FBX/glTF import lands with the asset pipeline milestone.");
                 }
                 if (ImGui::MenuItem("Refresh content browser")) {
                     app.SetFooterStatus("Content browser refreshed");
                 }
             } else if (label == "Build") {
                 if (ImGui::MenuItem("Build for Windows (x64)")) {
-                    app.PushToast(ToastKind::Warning, "No renderer yet",
-                              "Builds need the 0.2 viewport pipeline.");
+                    app.PushToast(ToastKind::Info, "Build queued",
+                                  "Packaging runs offline: tools/package_windows.ps1.");
                 }
                 if (ImGui::MenuItem("Build settings...")) {
-                    app.PushToast(ToastKind::Info, "Build settings", "Not available in this milestone.");
+                    app.PushToast(ToastKind::Info, "Build settings",
+                                  "Configuration cook is on the roadmap for 0.3.");
                 }
                 if (ImGui::MenuItem("Package to zip")) {
                     app.PushToast(ToastKind::Info, "Packaging",
                               "Use tools/package_windows.ps1 in the repository for now.");
                 }
             } else if (label == "Window") {
-                ImGui::MenuItem("Hierarchy", nullptr, &app.editor.showHierarchy);
-                ImGui::MenuItem("Inspector", nullptr, &app.editor.showInspector);
-                ImGui::MenuItem("Output log", nullptr, &app.editor.showConsole);
+                ImGui::MenuItem("World Outliner", nullptr, &app.editor.showHierarchy);
+                ImGui::MenuItem("Details", nullptr, &app.editor.showInspector);
+                ImGui::MenuItem("Content Browser / Output Log", nullptr, &app.editor.showConsole);
                 ImGui::MenuItem("Statistics", nullptr, &app.editor.showStatistics);
                 ImGui::Separator();
                 if (ImGui::MenuItem("Reset layout")) {
@@ -125,8 +129,8 @@ void MenuBar(AstraApp& app, ImVec2 min, float width) {
                     app.PushToast(ToastKind::Info, "docs/", "See ARCHITECTURE.md, UI_GUIDE.md, BUILD_WINDOWS.md.");
                 }
                 if (ImGui::MenuItem("Release notes")) {
-                    app.PushToast(ToastKind::Info, "0.1.0 - studio shell",
-                              "Launcher, registry, access codes and editor panels.");
+                    app.PushToast(ToastKind::Info, std::string(kEngineVersion) + " - viewport milestone",
+                              "CPU level viewport, content browser, actor meshes.");
                 }
                 ImGui::Separator();
                 if (ImGui::MenuItem("About Astra Studio")) {
@@ -166,7 +170,7 @@ void Toolbar(AstraApp& app, ImVec2 min, float width) {
     dl->AddLine(ImVec2(min.x, min.y + U(kToolbarHeight)),
                 ImVec2(min.x + width, min.y + U(kToolbarHeight)), Colors().stroke, U(1.0f));
 
-    // Left: project + branch.
+    // Left: back to the hub + project/level identity.
     ImGui::SetCursorScreenPos(ImVec2(min.x + U(10.0f), min.y + U(9.0f)));
     if (ui::IconButton("##back_hub", Icon::ChevronLeft, "Back to project hub", false, 28.0f)) {
         app.CloseProject();
@@ -176,24 +180,23 @@ void Toolbar(AstraApp& app, ImVec2 min, float width) {
                                                                  : "Unsaved workspace";
     const float projectX = min.x + U(46.0f);
     dl->AddText(Text().medium, Text().medium->FontSize, ImVec2(projectX, min.y + U(7.0f)),
-                Colors().text, str::Ellipsis(projectName, 32).c_str());
+                Colors().text, str::Ellipsis(projectName, 30).c_str());
     std::string meta = app.editor.scene.Name();
     if (app.editor.scene.IsDirty()) meta += "  *";
     dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(projectX, min.y + U(26.0f)),
                 app.editor.scene.IsDirty() ? Colors().warn : Colors().textFaint, meta.c_str());
 
-    // Center: tools.
-    float centerX = min.x + width * 0.5f - U(150.0f);
+    // Center: transform tools, space and snapping - the Unreal muscle memory row.
+    float centerX = min.x + width * 0.5f - U(232.0f);
     ImGui::SetCursorScreenPos(ImVec2(centerX, min.y + U(9.0f)));
-    const float toolSize = U(28.0f);
     struct ToolDef {
         Icon icon;
         const char* tooltip;
     };
     static const ToolDef kTools[] = {{Icon::Compass, "Select (Q)"},
-                                      {Icon::Move, "Move (W)"},
-                                      {Icon::Refresh, "Rotate (E)"},
-                                      {Icon::Axis, "Scale (R)"}};
+                                     {Icon::Move, "Move (W)"},
+                                     {Icon::Refresh, "Rotate (E)"},
+                                     {Icon::Axis, "Scale (R)"}};
     for (int i = 0; i < 4; ++i) {
         char id[16];
         std::snprintf(id, sizeof(id), "##tool%d", i);
@@ -201,18 +204,22 @@ void Toolbar(AstraApp& app, ImVec2 min, float width) {
             app.editor.tool = i;
         }
         ImGui::SameLine(0.0f, U(4.0f));
-        centerX += toolSize + U(4.0f);
+        centerX += U(32.0f);
     }
 
-    ImGui::SameLine(0.0f, U(10.0f));
-    const bool autosave = app.editor.autosave;
-    if (ui::IconButton("##autosave", Icon::Save,
-                       autosave ? "Autosave on (every 90s)" : "Autosave off", autosave, 28.0f)) {
-        app.editor.autosave = !app.editor.autosave;
-        app.SetFooterStatus(app.editor.autosave ? "Autosave enabled" : "Autosave disabled");
+    ImGui::SameLine(0.0f, U(8.0f));
+    if (ui::SecondaryButton(app.editor.transformSpace == 0 ? "World" : "Local",
+                            ImVec2(U(74.0f), U(30.0f)), true, Icon::Grid)) {
+        app.editor.transformSpace = app.editor.transformSpace == 0 ? 1 : 0;
+        app.SetFooterStatus(app.editor.transformSpace == 0 ? "World space" : "Local space");
+    }
+    ImGui::SameLine(0.0f, U(4.0f));
+    if (ui::IconButton("##snap", Icon::Grid, "Snap to 0.5 m grid", app.editor.snapToGrid, 30.0f)) {
+        app.editor.snapToGrid = !app.editor.snapToGrid;
+        app.SetFooterStatus(app.editor.snapToGrid ? "Snapping on" : "Snapping off");
     }
 
-    // Right: transport + save.
+    // Right: play transport, save, build.
     float rightX = min.x + width - U(10.0f);
     ImGui::SetCursorScreenPos(ImVec2(rightX - U(96.0f), min.y + U(8.0f)));
     if (ui::PrimaryButton("Save", ImVec2(U(96.0f), U(30.0f)), true, Icon::Save)) {
@@ -222,22 +229,35 @@ void Toolbar(AstraApp& app, ImVec2 min, float width) {
 
     ImGui::SetCursorScreenPos(ImVec2(rightX - U(84.0f), min.y + U(8.0f)));
     if (ui::SecondaryButton("Build", ImVec2(U(84.0f), U(30.0f)))) {
-        app.PushToast(ToastKind::Warning, "Renderer offline",
-                  "Builds open up once the viewport pipeline exists.");
+        app.PushToast(ToastKind::Info, "Packaging",
+                      "Cook + package runs from tools/package_windows.ps1.");
     }
     rightX -= U(92.0f);
 
     ImGui::SetCursorScreenPos(ImVec2(rightX - U(96.0f), min.y + U(8.0f)));
-    if (ui::IconButton("##stop", Icon::Stop, "Stop (renderer offline)", false, 30.0f)) {
-        app.PushToast(ToastKind::Info, "Play mode", "Nothing to stop - no renderer yet.");
+    if (ui::IconButton("##stop", Icon::Stop, "Stop", app.editor.playing || app.editor.simulating,
+                       30.0f)) {
+        app.editor.playing = false;
+        app.editor.simulating = false;
+        app.SetFooterStatus("Stopped");
     }
     ImGui::SameLine(0.0f, U(2.0f));
-    if (ui::IconButton("##pause", Icon::Pause, "Pause (renderer offline)", false, 30.0f)) {
-        app.PushToast(ToastKind::Info, "Play mode", "Nothing to pause - no renderer yet.");
+    if (ui::IconButton("##simulate", Icon::Pause, "Simulate (no input)",
+                       app.editor.simulating, 30.0f)) {
+        app.editor.simulating = !app.editor.simulating;
+        app.editor.playing = false;
+        app.SetFooterStatus(app.editor.simulating ? "Simulating" : "Simulation stopped");
     }
     ImGui::SameLine(0.0f, U(2.0f));
-    if (ui::IconButton("##play", Icon::Play, "Play (renderer offline)", false, 30.0f)) {
-        app.PushToast(ToastKind::Info, "Play mode", "Scenes run headlessly today; the viewport is 0.2.");
+    if (ui::IconButton("##play", Icon::Play, "Play in editor", app.editor.playing, 30.0f)) {
+        app.editor.playing = !app.editor.playing;
+        app.editor.simulating = false;
+        if (app.editor.playing) {
+            log::Info("editor", "play-in-editor session started");
+            app.SetFooterStatus("Playing in editor");
+        } else {
+            app.SetFooterStatus("Play stopped");
+        }
     }
 }
 
@@ -269,14 +289,15 @@ void StatusBar(AstraApp& app, ImVec2 min, float width, float height) {
                     Colors().success, status.c_str());
     }
 
-    std::string right = "Renderer: offline";
+    std::string right = "Renderer: CPU raster";
     const float rendererWidth = Text().tiny->CalcTextSizeA(Text().tiny->FontSize, FLT_MAX, 0.0f,
                                                            right.c_str()).x;
     dl->AddText(Text().tiny, Text().tiny->FontSize,
-                ImVec2(min.x + width - U(16.0f) - rendererWidth, min.y + U(7.0f)), Colors().warn,
-                right.c_str());
+                ImVec2(min.x + width - U(16.0f) - rendererWidth, min.y + U(7.0f)),
+                Colors().success, right.c_str());
 
-    right = str::Format("%zu entities  ·  %.0f fps  ·  %s", app.editor.scene.Count(),
+    right = str::Format("%zu actors  ·  %d tris  ·  %.0f fps  ·  %s", app.editor.scene.Count(),
+                        app.editor.viewportStats.triangles,
                         app.dt > 0.0f ? 1.0f / app.dt : 0.0f, kEngineVersion);
     const float infoWidth = Text().tiny->CalcTextSizeA(Text().tiny->FontSize, FLT_MAX, 0.0f,
                                                        right.c_str()).x;
@@ -314,13 +335,14 @@ void Editor(AstraApp& app) {
 
     const float rightEdge = max.x - U(kGap) - (app.editor.showInspector ? rightWidth + U(kGap) : 0.0f);
     const float centerWidth = ImMax(U(320.0f), rightEdge - cursorX);
-    const float consoleHeight = app.editor.showConsole ? ImClamp(bodyHeight * 0.30f, U(140.0f), U(240.0f)) : 0.0f;
-    const float viewportHeight = bodyHeight - (app.editor.showConsole ? consoleHeight + U(kGap) : 0.0f);
+    const float drawerHeight =
+        app.editor.showConsole ? ImClamp(bodyHeight * 0.28f, U(150.0f), U(220.0f)) : 0.0f;
+    const float viewportHeight = bodyHeight - (app.editor.showConsole ? drawerHeight + U(kGap) : 0.0f);
 
     panels::Viewport(app, ImVec2(cursorX, bodyTop), ImVec2(centerWidth, viewportHeight));
     if (app.editor.showConsole) {
-        panels::Console(app, ImVec2(cursorX, bodyTop + viewportHeight + U(kGap)),
-                        ImVec2(centerWidth, consoleHeight));
+        panels::BottomPanel(app, ImVec2(cursorX, bodyTop + viewportHeight + U(kGap)),
+                            ImVec2(centerWidth, drawerHeight));
     }
 
     if (app.editor.showInspector) {
@@ -338,13 +360,22 @@ void Editor(AstraApp& app) {
 
     // Keyboard shortcuts.
     ImGuiIO& io = ImGui::GetIO();
+    if (!io.WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Q, false)) app.editor.tool = 0;
+        if (ImGui::IsKeyPressed(ImGuiKey_W, false)) app.editor.tool = 1;
+        if (ImGui::IsKeyPressed(ImGuiKey_E, false)) app.editor.tool = 2;
+        if (ImGui::IsKeyPressed(ImGuiKey_R, false)) app.editor.tool = 3;
+        if (ImGui::IsKeyPressed(ImGuiKey_F, false)) {
+            render::FrameSelection(app.editor.viewportCamera, app.editor.scene, app.editor.selected);
+        }
+    }
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false)) app.SaveScene();
     if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_K, false)) app.showCommandPalette = true;
     if (!io.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_Delete, false) &&
         app.editor.selected != scene::kInvalidEntity) {
         app.editor.scene.DestroyEntity(app.editor.selected);
         app.editor.selected = scene::kInvalidEntity;
-        app.SetFooterStatus("Entity deleted");
+        app.SetFooterStatus("Actor deleted");
     }
 
     ImGui::SetCursorScreenPos(min);

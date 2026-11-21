@@ -17,10 +17,15 @@ PanelScope BeginPanel(const char* id, const char* title, ui::Icon icon, ImVec2 p
                       const char* badge = nullptr, ImGuiWindowFlags flags = 0);
 void EndPanel();
 
+// Unreal-style panel set: World Outliner, Details, Level Viewport, and a tabbed
+// bottom drawer holding the Content Browser and the Output Log.
 void Hierarchy(AstraApp& app, ImVec2 pos, ImVec2 size);
 void Inspector(AstraApp& app, ImVec2 pos, ImVec2 size);
 void Viewport(AstraApp& app, ImVec2 pos, ImVec2 size);
+void ContentBrowserBody(AstraApp& app);
+void BottomPanel(AstraApp& app, ImVec2 pos, ImVec2 size);
 void Console(AstraApp& app, ImVec2 pos, ImVec2 size);
+void ConsoleBody(AstraApp& app, ImVec2 pos, ImVec2 size);
 void Statistics(AstraApp& app, ImVec2 pos, ImVec2 size);
 
 // Shared by the toolbar and menus.

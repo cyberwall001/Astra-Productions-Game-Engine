@@ -62,7 +62,7 @@ void DrawBrandPanel(AstraApp&, ImVec2 min, ImVec2 max, float panelWidth) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + panelWidth - U(96.0f));
     ui::PushFont(Text().h1);
     ImGui::PushStyleColor(ImGuiCol_Text, ui::ToVec4(Colors().text));
-    ImGui::TextWrapped("Chase the storm.\nShip the game.");
+    ImGui::TextWrapped("Build the world.\nShip the game.");
     ImGui::PopStyleColor();
     ui::PopFont();
     ImGui::PopTextWrapPos();
@@ -73,8 +73,8 @@ void DrawBrandPanel(AstraApp&, ImVec2 min, ImVec2 max, float panelWidth) {
     ImGui::PushStyleColor(ImGuiCol_Text, ui::ToVec4(Colors().textDim));
     ui::PushFont(Text().body);
     ImGui::TextWrapped(
-        "Astra Engine is a storm-chasing first game engine: weather-native scenes, "
-        "deterministic replays and a studio toolchain built for intercept crews.");
+        "Astra Engine is a general-purpose game engine: a real level viewport, "
+        "actor-based levels, deterministic replays and a studio toolchain for small teams.");
     ui::PopFont();
     ImGui::PopStyleColor();
     ImGui::PopTextWrapPos();

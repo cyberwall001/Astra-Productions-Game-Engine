@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "astra/app/AstraApp.h"
+#include "astra/render/ViewportRenderer.h"
 #include "astra/app/KeyForgeApp.h"
 #include "astra/app/Screens.h"
 #include "astra/core/FileIO.h"
@@ -115,6 +116,25 @@ void RenderFrame(const std::function<void()>& draw) {
     gPreview.framebuffer.Resize(gPreview.width, gPreview.height);
     gPreview.framebuffer.Clear(9, 9, 11, 255);
     soft::RenderDrawData(ImGui::GetDrawData(), gPreview.framebuffer, ResolveTexture);
+}
+
+int gFailures = 0;
+
+void Check(bool condition, const char* what) {
+    if (condition) {
+        std::printf("check: %-52s ok\n", what);
+        return;
+    }
+    std::printf("check: %-52s FAILED\n", what);
+    ++gFailures;
+}
+
+void MouseMove(float x, float y) { ImGui::GetIO().AddMousePosEvent(x, y); }
+void MouseButton(int button, bool down) { ImGui::GetIO().AddMouseButtonEvent(button, down); }
+void MouseWheel(float notches) { ImGui::GetIO().AddMouseWheelEvent(0.0f, notches); }
+void KeyPress(ImGuiKey key) {
+    ImGui::GetIO().AddKeyEvent(key, true);
+    ImGui::GetIO().AddKeyEvent(key, false);
 }
 
 void Save(const std::string& name) {
@@ -291,12 +311,109 @@ void ShotEditor(astra::app::AstraApp& app) {
     OpenDemoProject(app);
     app.screen = astra::app::Screen::Editor;
     app.transition = 1.0f;
-    // Select the mesocyclone so the inspector shows a weather field.
-    if (astra::scene::Entity* entity = app.editor.scene.FindByName("Supercell 03 / Mesocyclone")) {
+    // Select a mesh actor so the inspector shows the static mesh group.
+    if (astra::scene::Entity* entity = app.editor.scene.FindByName("Cube")) {
         app.editor.selected = entity->id;
     }
     for (int i = 0; i < 6; ++i) RenderFrame([&] { app.Draw(); });
     Save("09-editor");
+
+    // ---- drive the viewport like a user, right where the panel published the rect -----
+    astra::render::Rect viewport{{app.editor.viewportMinX, app.editor.viewportMinY},
+                                 {app.editor.viewportMaxX, app.editor.viewportMaxY}};
+    Check(viewport.Width() > 300.0f && viewport.Height() > 200.0f,
+          "viewport published a usable screen rect");
+
+    const ImVec2 pivot{(viewport.min.x + viewport.max.x) * 0.5f,
+                       (viewport.min.y + viewport.max.y) * 0.5f};
+
+    // Right drag orbits.
+    const float yawBefore = app.editor.viewportCamera.yawDeg;
+    MouseMove(pivot.x, pivot.y);
+    RenderFrame([&] { app.Draw(); });
+    MouseButton(1, true);
+    RenderFrame([&] { app.Draw(); });
+    for (int i = 1; i <= 6; ++i) {
+        MouseMove(pivot.x + static_cast<float>(i) * 9.0f, pivot.y + static_cast<float>(i) * 2.0f);
+        RenderFrame([&] { app.Draw(); });
+    }
+    MouseButton(1, false);
+    RenderFrame([&] { app.Draw(); });
+    Check(app.editor.viewportCamera.yawDeg != yawBefore, "right-drag orbited the camera");
+
+    // Wheel zooms.
+    const float distanceBefore = app.editor.viewportCamera.distance;
+    MouseMove(pivot.x, pivot.y);
+    RenderFrame([&] { app.Draw(); });
+    MouseWheel(2.0f);
+    RenderFrame([&] { app.Draw(); });
+    MouseWheel(0.0f);
+    RenderFrame([&] { app.Draw(); });
+    Check(app.editor.viewportCamera.distance < distanceBefore, "wheel dollied the camera in");
+
+    // Reset the framing, then click an actor the renderer itself picks.
+    astra::render::FrameSelection(app.editor.viewportCamera, app.editor.scene,
+                                  app.editor.scene.FindByName("Cube")
+                                      ? app.editor.scene.FindByName("Cube")->id
+                                      : astra::scene::kInvalidEntity);
+    RenderFrame([&] { app.Draw(); });
+
+    ImVec2 target{pivot.x, pivot.y};
+    astra::scene::EntityId expected = astra::scene::kInvalidEntity;
+    for (float y = viewport.min.y + 30.0f; y < viewport.max.y - 30.0f && expected == 0; y += 12.0f) {
+        for (float x = viewport.min.x + 30.0f; x < viewport.max.x - 30.0f; x += 12.0f) {
+            const ImVec2 probe{x, y};
+            const astra::scene::EntityId hit =
+                astra::render::Pick(viewport, app.editor.scene, app.editor.viewportCamera, probe);
+            if (hit != astra::scene::kInvalidEntity && hit != app.editor.selected) {
+                expected = hit;
+                target = probe;
+                break;
+            }
+        }
+    }
+    Check(expected != astra::scene::kInvalidEntity, "found a pickable actor in the viewport");
+
+    app.editor.selected = astra::scene::kInvalidEntity;
+    MouseMove(target.x, target.y);
+    RenderFrame([&] { app.Draw(); });
+    MouseButton(0, true);
+    RenderFrame([&] { app.Draw(); });
+    MouseButton(0, false);
+    RenderFrame([&] { app.Draw(); });
+    RenderFrame([&] { app.Draw(); });
+    Check(app.editor.selected == expected, "left click selected the actor under the cursor");
+
+    // F frames whatever is selected.
+    const astra::scene::Entity* selectedEntity = app.editor.scene.Find(app.editor.selected);
+    Check(selectedEntity != nullptr, "selection resolved to an entity");
+    if (selectedEntity) {
+        const astra::scene::Vec3 framedTarget = selectedEntity->transform.position;
+        app.editor.viewportCamera.target = astra::scene::Vec3(0.0f, 0.0f, 0.0f);
+        KeyPress(ImGuiKey_F);
+        RenderFrame([&] { app.Draw(); });
+        Check(app.editor.viewportCamera.target.x == framedTarget.x &&
+                  app.editor.viewportCamera.target.z == framedTarget.z,
+              "F framed the selected actor");
+    }
+
+    // Put the selection back on the cube for the wireframe shot.
+    if (astra::scene::Entity* entity = app.editor.scene.FindByName("Cube")) {
+        app.editor.selected = entity->id;
+        astra::render::FrameSelection(app.editor.viewportCamera, app.editor.scene, entity->id);
+    }
+    RenderFrame([&] { app.Draw(); });
+
+    // Same level, wireframe view mode with the cone framed.
+    app.editor.viewport.mode = astra::render::ViewMode::Wireframe;
+    app.editor.tool = 1;
+    if (astra::scene::Entity* entity = app.editor.scene.FindByName("Cone")) {
+        app.editor.selected = entity->id;
+        astra::render::FrameSelection(app.editor.viewportCamera, app.editor.scene, entity->id);
+    }
+    for (int i = 0; i < 3; ++i) RenderFrame([&] { app.Draw(); });
+    Save("09-editor-wireframe");
+    app.editor.viewport.mode = astra::render::ViewMode::Shaded;
 }
 
 void ShotSettings(astra::app::AstraApp& app) {
@@ -455,6 +572,10 @@ int main(int argc, char** argv) {
     astra::app::screens::Overlays(app);  // drain any pending overlays
 
     ImGui::DestroyContext();
+    if (gFailures > 0) {
+        std::printf("failed: %d interaction check(s)\n", gFailures);
+        return 1;
+    }
     std::printf("done: %s\n", gPreview.outputDir.c_str());
     return 0;
 }
