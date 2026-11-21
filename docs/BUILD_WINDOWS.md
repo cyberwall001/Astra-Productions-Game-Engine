@@ -33,6 +33,27 @@ build/windows-msvc/Release/assets/...           fonts, branding, demo workspace
 
 The build copies `assets/` next to the executables automatically.
 
+### Cross-compiling from Linux (no MSVC, no Windows runner)
+
+When the Windows CI job cannot start, the same targets cross-compile from Linux with
+[Zig](https://ziglang.org)'s bundled mingw-w64 toolchain:
+
+```bash
+pip install ziglang cmake
+tools/package_windows_zig.sh          # -> dist/astra-studio-<version>-windows-x64.zip
+```
+
+The script fetches GLFW 3.4, configures with `-DCMAKE_SYSTEM_NAME=Windows -G "Unix Makefiles"`,
+builds `astra_studio` + `astra_keyforge` and stages the same layout as
+`tools/package_windows.ps1` (exe + `assets/` + docs + README).
+
+Differences from the official build, which matter if you are debugging a crash:
+
+* mingw-w64 instead of MSVC — the C++ runtime and libc are linked statically, so the archive
+  needs no extra DLLs, but MSVC-only code paths are compiled by GCC semantics;
+* the resulting archive is a preview; the Release workflow's MSVC build remains the official
+  artifact on the Releases page.
+
 ### Without presets
 
 ```powershell

@@ -25,3 +25,5 @@ docs/screenshots/_scratch/
 
 # ImGui writes its window layout next to the executable when the app runs.
 imgui.ini
+dist/
+build/zig-windows/
