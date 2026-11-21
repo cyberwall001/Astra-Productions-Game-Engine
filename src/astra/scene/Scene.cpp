@@ -438,6 +438,68 @@ std::size_t Scene::ActiveCount() const {
         std::count_if(entities_.begin(), entities_.end(), [](const Entity& e) { return e.active; }));
 }
 
+namespace {
+
+// FNV-1a over the fields that change what a frame looks like.
+void HashBytes(std::uint64_t& hash, const void* data, std::size_t size) {
+    const auto* bytes = static_cast<const unsigned char*>(data);
+    for (std::size_t i = 0; i < size; ++i) {
+        hash ^= bytes[i];
+        hash *= 1099511628211ull;
+    }
+}
+
+void HashFloat(std::uint64_t& hash, float value) { HashBytes(hash, &value, sizeof(value)); }
+
+void HashVec3(std::uint64_t& hash, const Vec3& value) {
+    HashFloat(hash, value.x);
+    HashFloat(hash, value.y);
+    HashFloat(hash, value.z);
+}
+
+}  // namespace
+
+std::uint64_t Scene::ContentHash() const {
+    std::uint64_t hash = 1469598103934665603ull;
+    for (const Entity& entity : entities_) {
+        HashBytes(hash, entity.name.data(), entity.name.size());
+        HashBytes(hash, &entity.id, sizeof(entity.id));
+        HashBytes(hash, &entity.parent, sizeof(entity.parent));
+        const auto active = entity.active ? 1 : 0;
+        HashBytes(hash, &active, sizeof(active));
+        HashVec3(hash, entity.transform.position);
+        HashVec3(hash, entity.transform.rotation);
+        HashVec3(hash, entity.transform.scale);
+        HashVec3(hash, entity.mesh.size);
+        HashVec3(hash, entity.mesh.baseColor);
+        HashBytes(hash, &entity.mesh.shape, sizeof(entity.mesh.shape));
+        HashBytes(hash, &entity.mesh.meshId, sizeof(entity.mesh.meshId));
+        HashBytes(hash, &entity.mesh.visible, sizeof(entity.mesh.visible));
+        HashVec3(hash, entity.material.baseColor);
+        HashVec3(hash, entity.material.accentColor);
+        HashBytes(hash, &entity.material.shader, sizeof(entity.material.shader));
+        HashFloat(hash, entity.material.roughness);
+        HashFloat(hash, entity.material.metallic);
+        HashFloat(hash, entity.material.emissive);
+        HashFloat(hash, entity.material.opacity);
+        HashFloat(hash, entity.material.uvScale);
+        HashFloat(hash, entity.light.intensity);
+        HashVec3(hash, entity.light.color);
+        HashBytes(hash, &entity.light.type, sizeof(entity.light.type));
+        HashFloat(hash, entity.atmosphere.fogDensity);
+        HashFloat(hash, entity.atmosphere.cloudCover);
+        HashFloat(hash, entity.atmosphere.rainIntensity);
+        HashFloat(hash, entity.atmosphere.exposure);
+        HashVec3(hash, entity.atmosphere.sunDirection);
+    }
+    for (const MeshAsset& mesh : meshes_) {
+        HashBytes(hash, mesh.name.data(), mesh.name.size());
+        HashBytes(hash, mesh.vertices.data(), mesh.vertices.size() * sizeof(MeshVertex));
+        HashBytes(hash, mesh.indices.data(), mesh.indices.size() * sizeof(u32));
+    }
+    return hash;
+}
+
 std::string Scene::ToJson() const {
     json::Value root = json::Value::MakeObject();
     root.Set("schema", json::Value(kSceneSchemaVersion));

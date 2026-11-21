@@ -486,6 +486,53 @@ void ShotPlay(astra::app::AstraApp& app) {
     Check(!app.editor.playing, "stop ended the play session");
 }
 
+void ShotVolumetrics(astra::app::AstraApp& app) {
+    app.editor.showRenderPanel = true;
+    app.editor.showMaterialEditor = false;
+    app.editor.trace.width = 320;
+    app.editor.trace.height = 180;
+    app.editor.trace.samples = 48;
+    app.editor.trace.maxBounces = 2;
+    app.editor.trace.volumetrics = true;
+
+    // Dense fog so the light shafts read in the still.
+    float previousFog = 0.0f;
+    for (astra::scene::Entity& entity : app.editor.scene.Entities()) {
+        if (entity.Has(astra::scene::Component::Atmosphere)) {
+            previousFog = entity.atmosphere.fogDensity;
+            entity.atmosphere.fogDensity = 0.62f;
+        }
+    }
+
+    // Drive the real cached path twice: the second bake must come from the cache.
+    astra::render::TraceCache* cache = &app.editor.traceCache;
+    const int buildsBefore = cache->builds;
+    const astra::render::TraceScene& baked =
+        astra::render::GetTraceScene(app.editor.scene, *cache);
+    Check(cache->builds == buildsBefore + 1, "volumetric shot rebuilt the BVH once");
+    const astra::render::TraceScene& again =
+        astra::render::GetTraceScene(app.editor.scene, *cache);
+    Check(cache->builds == buildsBefore + 1, "second bake reused the cached BVH");
+    Check(&baked == &again, "cache returns the same scene instance");
+
+    app.editor.traceImage =
+        astra::render::Render(baked, app.editor.viewportCamera, app.editor.trace,
+                              &app.editor.traceStats);
+    Check(!app.editor.traceImage.Empty(), "volumetric render produced an image");
+    Check(app.editor.traceStats.fogDensity > 0.01f, "fog density reached the tracer");
+    app.editor.traceProgress = 1.0f;
+    for (int i = 0; i < 2; ++i) RenderFrame([&] { app.Draw(); });
+    Save("24-volumetric-fog");
+
+    // Restore the level for the shots that follow.
+    for (astra::scene::Entity& entity : app.editor.scene.Entities()) {
+        if (entity.Has(astra::scene::Component::Atmosphere)) {
+            entity.atmosphere.fogDensity = previousFog;
+        }
+    }
+    app.editor.showRenderPanel = false;
+}
+
 void ShotMaterialEditor(astra::app::AstraApp& app) {
     // The editor scans the real material folder (seeding starters on first run).
     app.LoadMaterials();
@@ -776,6 +823,7 @@ int main(int argc, char** argv) {
     ShotEditor(app);
     ShotPlay(app);
     ShotRenderPanel(app);
+    ShotVolumetrics(app);
     ShotMaterialEditor(app);
     ShotScriptEditor(app);
     ShotBlenderImport(app);

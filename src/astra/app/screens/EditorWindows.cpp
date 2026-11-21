@@ -158,6 +158,12 @@ void RenderPanel(AstraApp& app) {
     CheckboxAt("Reflections", &traceState.reflections, ImVec2(left + U(150.0f), y));
     CheckboxAt("Denoise", &traceState.denoise, ImVec2(left + U(276.0f), y));
     y += U(28.0f);
+    CheckboxAt("Volumetric fog", &traceState.volumetrics, ImVec2(left, y));
+    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left + U(150.0f), y + U(5.0f)),
+                Colors().textFaint,
+                str::Format("density %.2f from world settings", app.editor.traceStats.fogDensity)
+                    .c_str());
+    y += U(30.0f);
 
     // Backend picker: GPU is honestly reported as unavailable on this build.
     dl->AddText(Text().small, Text().small->FontSize, ImVec2(left, y + U(8.0f)), Colors().textDim,
@@ -189,12 +195,13 @@ void RenderPanel(AstraApp& app) {
         if (app.editor.tracing) return;
         app.StartTrace();
         if (!app.editor.tracing) return;
-        render::TraceScene baked;
-        baked.Build(app.editor.scene);
+        const int buildsBefore = app.editor.traceCache.builds;
+        const render::TraceScene& baked = render::GetTraceScene(app.editor.scene, app.editor.traceCache);
         const render::Camera camera = app.editor.playing ? app.editor.player.ViewCamera()
                                                         : app.editor.viewportCamera;
         app.editor.traceImage =
             render::Render(baked, camera, traceState, &app.editor.traceStats);
+        app.editor.traceStats.cached = app.editor.traceCache.builds == buildsBefore;
         app.editor.traceProgress = 1.0f;
         app.editor.tracing = false;
         app.editor.traceError.clear();
@@ -227,10 +234,12 @@ void RenderPanel(AstraApp& app) {
 
     const float contentWidth = ImGui::GetContentRegionAvail().x;
     char stats[192];
-    std::snprintf(stats, sizeof(stats), "%d tris  -  %d BVH nodes  -  %d threads  -  %lld rays  -  %.0f ms",
+    std::snprintf(stats, sizeof(stats),
+                  "%d tris  -  %d BVH nodes  -  %d threads  -  %lld rays  -  %.0f ms  -  %s",
                   app.editor.traceStats.triangles, app.editor.traceStats.nodes,
                   app.editor.traceStats.threads, static_cast<long long>(app.editor.traceStats.rays),
-                  app.editor.traceStats.milliseconds);
+                  app.editor.traceStats.milliseconds,
+                  app.editor.traceStats.cached ? "BVH cached" : "BVH rebuilt");
     dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textFaint, stats);
     y += U(18.0f);
     if (!app.editor.traceError.empty()) {

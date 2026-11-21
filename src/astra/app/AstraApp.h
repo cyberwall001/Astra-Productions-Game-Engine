@@ -149,6 +149,7 @@ struct EditorState {
 
     // ---- offline ray tracing ("Render" panel) ----------------------------
     render::TraceSettings trace;
+    render::TraceCache traceCache;   // baked BVH, rebuilt only when the level changes
     render::TraceStats traceStats;
     image::Buffer traceImage;
     std::string tracePath;

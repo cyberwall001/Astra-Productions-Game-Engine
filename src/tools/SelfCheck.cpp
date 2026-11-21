@@ -718,6 +718,110 @@ void TestPresets() {
     }
 }
 
+void TestVolumetrics() {
+    astra::scene::Scene level = astra::scene::Scene::CreateSampleLevel();
+    astra::render::TraceCache cache;
+    const astra::render::TraceScene& baked = astra::render::GetTraceScene(level, cache);
+    CHECK_EQ(cache.builds, 1);
+
+    // Scripted atmosphere control drives the same value the tracer reads.
+    {
+        astra::script::Host host(level);
+        const astra::script::ScriptRun run = host.Run(R"(
+            setAtmosphere(0.5, 0.2, 0.0)
+            let fog = fogDensity()
+            print(fog)
+        )");
+        CHECK(run.result.ok);
+        CHECK(!run.output.empty() && run.output.front().find("0.5") != std::string::npos);
+    }
+    astra::render::GetTraceScene(level, cache);
+    CHECK_EQ(cache.builds, 2);
+    CHECK(baked.TriangleCount() > 0);
+
+    // Same content -> same bake, no rebuild.
+    CHECK_EQ(level.ContentHash(), level.ContentHash());
+    astra::render::GetTraceScene(level, cache);
+    CHECK_EQ(cache.builds, 2);
+
+    // Moving an actor changes the hash and forces a rebuild.
+    const std::uint64_t before = level.ContentHash();
+    if (astra::scene::Entity* cube = level.FindByName("Cube")) {
+        cube->transform.position.x += 1.5f;
+    }
+    CHECK(level.ContentHash() != before);
+    astra::render::GetTraceScene(level, cache);
+    CHECK_EQ(cache.builds, 3);
+    astra::render::Camera camera;
+    camera.target = astra::scene::Vec3(0.0f, 1.0f, 0.0f);
+    camera.distance = 13.0f;
+    camera.yawDeg = 24.0f;
+    camera.pitchDeg = 16.0f;
+
+    astra::render::TraceSettings settings;
+    settings.width = 160;
+    settings.height = 90;
+    settings.samples = 8;
+    settings.maxBounces = 2;
+    settings.denoise = false;
+
+    // The trace scene must pick the fog density up from the level's atmosphere actor.
+    float atmosphereFog = 0.0f;
+    for (const astra::scene::Entity& entity : level.Entities()) {
+        if (entity.Has(astra::scene::Component::Atmosphere)) {
+            atmosphereFog = entity.atmosphere.fogDensity;
+        }
+    }
+    CHECK(atmosphereFog > 0.0f);
+    // The tracer converts the world's fog amount into a per-metre extinction coefficient.
+    const float expectedDensity = atmosphereFog * 0.05f;
+    const astra::render::TraceScene& foggy = astra::render::GetTraceScene(level, cache);
+    CHECK(std::fabs(foggy.FogDensity() - expectedDensity) < 0.001f);
+
+    settings.volumetrics = false;
+    astra::render::TraceStats clearStats;
+    const auto clear = astra::render::Render(foggy, camera, settings, &clearStats);
+    CHECK(!clear.Empty());
+    CHECK(std::fabs(clearStats.fogDensity - expectedDensity) < 0.001f);
+
+    settings.volumetrics = true;
+    astra::render::TraceStats foggedStats;
+    const auto fogged = astra::render::Render(foggy, camera, settings, &foggedStats);
+    CHECK(!fogged.Empty());
+
+    const auto mean = [](const astra::image::Buffer& buffer) {
+        double total = 0.0;
+        for (int y = 0; y < buffer.height; ++y) {
+            for (int x = 0; x < buffer.width; ++x) {
+                const auto color = buffer.GetPixel(x, y);
+                total += 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b;
+            }
+        }
+        return total / static_cast<double>(buffer.width * buffer.height);
+    };
+    const double clearMean = mean(clear);
+    const double foggedMean = mean(fogged);
+    CHECK(clearMean > 0.0 && foggedMean > 0.0);
+    // Fog adds scattered light: the frame brightens and the difference is clearly visible.
+    CHECK(foggedMean > clearMean + 0.01);
+
+    // Fog is not free: the volumetric pass casts its own shadow rays.
+    CHECK(foggedStats.rays > clearStats.rays);
+
+    // A level with the fog switched off renders identically either way.
+    for (astra::scene::Entity& entity : level.Entities()) {
+        if (entity.Has(astra::scene::Component::Atmosphere)) entity.atmosphere.fogDensity = 0.0f;
+    }
+    astra::render::TraceScene noFog;
+    noFog.Build(level);
+    CHECK(noFog.FogDensity() <= 0.0001f);
+    settings.volumetrics = true;
+    const auto withToggle = astra::render::Render(noFog, camera, settings, nullptr);
+    settings.volumetrics = false;
+    const auto withoutToggle = astra::render::Render(noFog, camera, settings, nullptr);
+    CHECK(std::fabs(mean(withToggle) - mean(withoutToggle)) < 0.0005);
+}
+
 void TestMaterials() {
     const std::string root = "/tmp/astra-selfcheck-materials";
     astra::fs::CreateDirectories(root);
@@ -1295,6 +1399,7 @@ const TestCase kTests[] = {
     {"scene.presets", TestPresets},
     {"game.player", TestPlayer},
     {"bridge.blender", TestBlenderBridge},
+    {"render.volumetrics", TestVolumetrics},
     {"asset.materials", TestMaterials},
     {"script.language", TestScript},
     {"project.files", TestProjects},
