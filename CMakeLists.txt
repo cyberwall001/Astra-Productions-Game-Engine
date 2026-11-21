@@ -2,14 +2,15 @@ cmake_minimum_required(VERSION 3.20)
 
 project(AstraStudio
     VERSION 0.1.1
-    DESCRIPTION "Astra Engine - storm-chasing game engine and studio"
+    DESCRIPTION "Astra Engine - general-purpose game engine and studio"
     LANGUAGES CXX)
 
-# The engine runtime (viewport pipeline) is not implemented yet, so the project stays on
-# the 0.x line. Bump the VERSION line by hand only for deliberate minor releases; the
-# release workflow in .github/workflows/release.yml bumps the patch number.
+# The engine is still pre-1.0: the viewport rasterises on the CPU and the asset pipeline
+# is not in yet, so the project stays on the 0.x line. Bump the VERSION line by hand only
+# for deliberate minor releases; the release workflow in .github/workflows/release.yml
+# bumps the patch number.
 if(PROJECT_VERSION VERSION_GREATER_EQUAL 1.0.0)
-    message(FATAL_ERROR "Astra Studio stays below 1.0.0 until the rendering pipeline ships "
+    message(FATAL_ERROR "Astra Studio stays below 1.0.0 until the engine API stabilises "
                         "(see docs/ROADMAP.md). Current VERSION is ${PROJECT_VERSION}.")
 endif()
 

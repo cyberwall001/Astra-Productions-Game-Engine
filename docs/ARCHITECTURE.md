@@ -70,6 +70,36 @@ New projects open on the **storm template**: `Chase Environment → {Chase Cam, 
 Supercell 03 / Mesocyclone → {Wall Cloud, Vortex Core, Precipitation Curtain}}, Chase
 Vehicle`. A project is never an empty viewport on first launch.
 
+## Render module (`src/astra/render`)
+
+There is no GPU pass in this milestone. The viewport rasterises on the CPU straight into the
+ImGui draw list, which keeps one code path for the GLFW build and the headless preview tool and
+makes the editor fully screenshot-testable.
+
+```
+Camera.h/.cpp        orbit camera: target/yaw/pitch/distance/fov, Orbit/Pan/Zoom/Frame, Basis()
+Math.h               Vec3 maths, Euler rotation, perspective helpers
+ViewportTypes.h/.cpp ViewMode + Options + Stats (ImGui-free, so AstraApp can own them)
+ViewportRenderer.h   Rect, ActorBounds, Draw, Pick, FrameSelection
+ViewportRenderer.cpp procedural meshes, projector, clipping, painter sort, shading, chrome
+```
+
+`Draw()` is one pass: read the environment (sun direction/colour from a Directional Light,
+sky and fog from a Sky Atmosphere), build a `Projector` from the camera, emit the sky and the
+fading ground grid, transform and shade every visible mesh, clip each triangle against the near
+plane (Sutherland–Hodgman), painter-sort the surviving triangles by depth and push them into the
+draw list through `PrimReserve`/`PrimVtx`. Chrome — ground shadows, actor icons, the weather
+volume outline, the selection box and the axis gizmo — is drawn on top.
+
+Meshes are procedural (`MeshShape::Cube | Sphere | Cylinder | Cone | Plane`) with per-axis
+scale, albedo, visibility, shadow and two-sided flags. A `MeshComponent` is just data, so a
+level round-trips through JSON with its geometry intact and the Details panel edits it through
+the same reflection model as every other component.
+
+`Pick()` is screen-space: it tests the mouse against each actor's projected bounding circle and
+returns the nearest hit, which is enough for box and primitive selection and needs no depth
+buffer. `FrameSelection()` reuses `Camera::Frame`, so `F` behaves like the Unreal focus key.
+
 ## Scene model
 
 `scene::Entity` carries a component bitmask (`Transform`, `Weather`, `Camera`, `Light`,

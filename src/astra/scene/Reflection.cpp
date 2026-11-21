@@ -25,7 +25,7 @@ std::vector<PropertyGroup> BuildInspectorModel(Entity& entity) {
 
     {
         PropertyGroup group;
-        group.title = "Identity";
+        group.title = "Actor";
         group.icon = "tag";
 
         PropertyDesc name;
@@ -54,11 +54,11 @@ std::vector<PropertyGroup> BuildInspectorModel(Entity& entity) {
         PropertyGroup group;
         group.title = "Transform";
         group.icon = "move";
-        group.removable = true;
-        group.component = Component::Transform;
+        // Every actor has a transform, so it is never offered for removal.
+        group.removable = false;
 
         PropertyDesc position;
-        position.label = "Position";
+        position.label = "Location";
         position.type = PropertyDesc::Type::Vec3;
         position.data = &entity.transform.position;
         position.minValue = -100000.0f;
@@ -85,6 +85,62 @@ std::vector<PropertyGroup> BuildInspectorModel(Entity& entity) {
         scale.maxValue = 1000.0f;
         scale.step = 0.01f;
         group.properties.push_back(std::move(scale));
+
+        groups.push_back(std::move(group));
+    }
+
+    if (entity.Has(Component::Mesh)) {
+        PropertyGroup group;
+        group.title = "Static Mesh";
+        group.icon = "cube";
+        group.removable = true;
+        group.component = Component::Mesh;
+
+        int shapeCount = 0;
+        const char* const* shapes = MeshShapeNames(shapeCount);
+
+        PropertyDesc shape;
+        shape.label = "Shape";
+        shape.type = PropertyDesc::Type::Enum;
+        shape.data = &entity.mesh.shape;
+        shape.options = shapes;
+        shape.optionCount = shapeCount;
+        group.properties.push_back(std::move(shape));
+
+        PropertyDesc size;
+        size.label = "Size";
+        size.type = PropertyDesc::Type::Vec3;
+        size.data = &entity.mesh.size;
+        size.minValue = 0.01f;
+        size.maxValue = 400.0f;
+        size.step = 0.1f;
+        size.unit = "m";
+        group.properties.push_back(std::move(size));
+
+        PropertyDesc color;
+        color.label = "Base color";
+        color.type = PropertyDesc::Type::Color;
+        color.data = &entity.mesh.baseColor;
+        group.properties.push_back(std::move(color));
+
+        PropertyDesc visible;
+        visible.label = "Visible";
+        visible.type = PropertyDesc::Type::Bool;
+        visible.data = &entity.mesh.visible;
+        group.properties.push_back(std::move(visible));
+
+        PropertyDesc shadows;
+        shadows.label = "Cast shadows";
+        shadows.type = PropertyDesc::Type::Bool;
+        shadows.data = &entity.mesh.castShadows;
+        group.properties.push_back(std::move(shadows));
+
+        PropertyDesc twoSided;
+        twoSided.label = "Two sided";
+        twoSided.type = PropertyDesc::Type::Bool;
+        twoSided.data = &entity.mesh.twoSided;
+        twoSided.tooltip = "Draw back faces as well - useful for interior shells.";
+        group.properties.push_back(std::move(twoSided));
 
         groups.push_back(std::move(group));
     }

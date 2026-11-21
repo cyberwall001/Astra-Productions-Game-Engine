@@ -97,6 +97,37 @@ with `U()` and recolour from a single `ImU32`, so nothing depends on an icon fon
   label on the first, three wide fields on the second — because three 44 px fields clip
   values like `900.02`.
 
+## Editor layout (Unreal vocabulary)
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│ menu bar: File · Edit · Window · Tools · Build · Help                    │
+├──────────────────────────────────────────────────────────────────────────┤
+│ back │ project + level · tools [Q W E R] World snap · stop sim play Build Save │
+├──────────────┬──────────────────────────────────────┬────────────────────┤
+│ World        │ Level Viewport                       │ Details            │
+│ Outliner     │  view modes · stats · axis triad     │  Actor/Transform   │
+│              ├──────────────────────────────────────┤  + component groups│
+│              │ Content Browser │ Output Log         ├────────────────────┤
+│              │ (tabbed drawer)                      │ Statistics         │
+├──────────────┴──────────────────────────────────────┴────────────────────┤
+│ status bar: branch · data root · actors · tris · fps · version · renderer │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+Panel rules:
+
+* **World Outliner** — grouped roots, search filter, inline add actor, badge column for
+  simulation components (`WX` for weather volumes).
+* **Level Viewport** — always the largest surface. Header carries the view-mode picker and the
+  grid/shadow/gizmo toggles; footer carries the camera type, view mode, actor count, resolution
+  and the axis triad. Clicking selects; drag orbits; `F` frames.
+* **Details** — a component stack per actor, Actor section folded by default (components open),
+  each group removable except Transform, plus `+ Add component`.
+* **Content Browser** — a tile grid of placeable assets; a click spawns the actor at the camera
+  target and selects it. The Output Log shares the same drawer as a tab.
+* **Statistics** — frame budget, viewport milliseconds, actor/draw/triangle counts.
+
 ## Motion
 
 * Screen transitions: 280 ms opaque curtain (`ui::Fade(bg, 1 - t)`), never alpha-multiplying

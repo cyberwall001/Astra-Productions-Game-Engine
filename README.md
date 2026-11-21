@@ -7,15 +7,25 @@
 `astra-studio-<version>-windows-x64.zip` from
 [Releases](https://github.com/cyberwall001/Astra-Productions-Game-Engine/releases/latest).
 
-A storm-chasing game engine and studio, written from scratch in C++17 for Windows.
-No Unity, no Unreal, no wrapper: the window layer, crypto, account registry, offline
-access-code licensing, GitHub project hub and the whole UI toolkit live in this repository.
+A general-purpose game engine and studio, written from scratch in C++17 for Windows.
+No Unity, no Unreal, no wrapper: the window layer, renderer, scene graph, crypto, account
+registry, offline access-code licensing, GitHub project hub and the whole UI toolkit live in
+this repository.
 
-**Milestone 1 — studio shell.** The application boots, signs in, registers accounts with
-one-time access codes, lists the repositories you have access to and opens the editor frame
-with a live scene graph. The game viewport is intentionally not wired up yet.
+**Milestone 2 — the level viewport.** The editor now ships a working 3D viewport: orbit /
+pan / zoom navigation, lit and wireframe view modes, a fading world grid, ground shadows,
+screen-space picking and live draw statistics. Actors carry real static meshes (cube, sphere,
+cylinder, cone, plane) instead of being abstract nodes, and the panel set follows the Unreal
+vocabulary: **World Outliner · Level Viewport · Details · Content Browser · Output Log**.
 
 ![Astra Studio editor](docs/screenshots/09-editor.png)
+
+| Shaded | Wireframe |
+| --- | --- |
+| ![Shaded viewport](docs/screenshots/09-editor.png) | ![Wireframe viewport](docs/screenshots/09-editor-wireframe.png) |
+
+Weather is now one optional system among many: the default level is a neutral sandbox, and
+storm volumes are a template you can drop in from the Content Browser.
 
 ## What is in the box
 
@@ -23,7 +33,7 @@ with a live scene graph. The game viewport is intentionally not wired up yet.
 | --- | --- |
 | **Astra Studio** (`AstraStudio.exe`) | loading screen → boot sequence → sign-in → registration → project hub → editor |
 | **Astra KeyForge** (`AstraKeyForge.exe`) | owner-only tool that mints single-use engine access codes |
-| **Headless tools** | `astra_selfcheck` (164 assertions) and `astra_uipreview` (renders every screen to PNG) |
+| **Headless tools** | `astra_selfcheck` (216 assertions) and `astra_uipreview` (renders every screen to PNG) |
 
 ### Launcher flow
 
@@ -37,7 +47,7 @@ with a live scene graph. The game viewport is intentionally not wired up yet.
 
 ### Studio
 
-| Editor | Settings | Command palette |
+| Level viewport | Settings | Command palette |
 | --- | --- | --- |
 | ![Editor](docs/screenshots/09-editor.png) | ![Settings](docs/screenshots/10-settings.png) | ![Palette](docs/screenshots/12-command-palette.png) |
 
@@ -48,6 +58,24 @@ with a live scene graph. The game viewport is intentionally not wired up yet.
 | ![Gate](docs/screenshots/13-keyforge-gate.png) | ![Generate](docs/screenshots/14-keyforge-generate.png) | ![Ledger](docs/screenshots/15-keyforge-ledger.png) |
 
 *(Every screenshot above is rendered from the real UI code by `astra_uipreview`, not mocked up.)*
+
+## Viewport controls
+
+| Input | Action |
+| --- | --- |
+| Right drag (or Alt + left drag) | Orbit the level camera |
+| Middle drag | Pan |
+| Wheel | Zoom (dolly towards the camera target) |
+| Left click | Select the actor under the cursor (in the World Outliner too) |
+| `F` | Frame the selected actor (or the whole level) |
+| `Q` `W` `E` `R` | Select / Move / Rotate / Scale tool |
+| `Delete` | Delete the selected actor |
+| `Ctrl+S` | Save the level |
+
+The viewport header carries the view-mode picker (Shaded, Unlit, Wireframe, Normals) plus
+toggles for grid, shadows and gizmos, and reports the CPU raster budget per frame. The bottom
+drawer switches between the **Content Browser** (click an asset to place it) and the
+**Output Log**.
 
 ## Access codes
 
@@ -93,7 +121,8 @@ src/astra/data        JSON reader/writer
 src/astra/licensing   access codes, master key, issue ledger
 src/astra/auth        accounts, sessions, registration
 src/astra/github      transport iface, WinHTTP, parsing, demo fixture
-src/astra/scene       entities, components, storm presets, reflection
+src/astra/render      orbit camera, mesh generation, CPU viewport rasteriser, picking
+src/astra/scene       entities, components (transform/mesh/light/camera/weather), reflection
 src/astra/project     astra.project.json, scene IO, recent projects
 src/astra/ui          theme, icons, widget library, branding
 src/astra/app         AstraApp flow, screens, editor panels, KeyForge
@@ -113,7 +142,7 @@ tools/                packaging, screenshot capture, PNG recompression
 * [docs/SECURITY.md](docs/SECURITY.md) — access codes, accounts, secrets at rest, network surface
 * [docs/UI_GUIDE.md](docs/UI_GUIDE.md) — design tokens, components, layout rules, motion
 * [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md) — prerequisites, presets, packaging, troubleshooting
-* [docs/ROADMAP.md](docs/ROADMAP.md) — viewport, renderer, gameplay, team workflow
+* [docs/ROADMAP.md](docs/ROADMAP.md) — viewport milestones, gameplay, team workflow
 * [docs/RELEASING.md](docs/RELEASING.md) — how every merge to `main` becomes a `v0.x` release
 
 ## Dependencies

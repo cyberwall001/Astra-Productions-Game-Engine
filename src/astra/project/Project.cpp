@@ -103,9 +103,9 @@ bool Create(const std::string& parentDirectory, const std::string& name, Project
         return false;
     }
 
-    // New projects open on the weather template: the same storm rig the hub uses
-    // for repositories, so a project is never an empty viewport on first launch.
-    scene::Scene starter = scene::Scene::CreateStormScene(info.name);
+    // New projects open on the sandbox level: a lit, gridded scene with a few actors,
+    // so a fresh project is never an empty viewport on first launch.
+    scene::Scene starter = scene::Scene::CreateSampleLevel(info.name);
     if (!SaveScene(info, starter, error)) return false;
 
     out = info;

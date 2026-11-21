@@ -12,6 +12,8 @@
 #include "astra/github/GitHubClient.h"
 #include "astra/licensing/AccessCode.h"
 #include "astra/project/Project.h"
+#include "astra/render/Camera.h"
+#include "astra/render/ViewportTypes.h"
 #include "astra/scene/Scene.h"
 
 namespace astra::app {
@@ -75,10 +77,27 @@ struct EditorState {
     project::ProjectInfo project;
     scene::EntityId selected = scene::kInvalidEntity;
     int tool = 1;  // 0 select, 1 move, 2 rotate, 3 scale
+    int transformSpace = 0;  // 0 world, 1 local
+    bool snapToGrid = true;
     bool playing = false;
+    bool simulating = false;
+
+    // Level viewport.
+    render::Camera viewportCamera;
+    render::Options viewport;
+    render::Stats viewportStats;
+    bool viewportFocus = false;   // the mouse is over the viewport this frame
+    // Level viewport rect in screen space, published by the panel so tools and tests can
+    // pick with exactly the projection that was drawn.
+    float viewportMinX = 0.0f;
+    float viewportMinY = 0.0f;
+    float viewportMaxX = 0.0f;
+    float viewportMaxY = 0.0f;
+    int bottomTab = 0;            // 0 Content Browser, 1 Output Log
     bool showHierarchy = true;
     bool showInspector = true;
     bool showConsole = true;
+    bool showContentBrowser = true;
     bool showStatistics = true;
     bool showWeatherGauge = true;
     int consoleFilter = 0;  // 0 all, 1 info, 2 warn, 3 error

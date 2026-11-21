@@ -1,5 +1,5 @@
-// scene/Scene.h - the runtime data the editor manipulates: entities, components and
-// the project's storm-chasing weather fields. No rendering, by design (milestone 1).
+// scene/Scene.h - the runtime data the editor manipulates: actors, their components and
+// the level's environment. The renderer consumes this; nothing here knows about ImGui.
 #pragma once
 
 #include <cstdint>
@@ -31,6 +31,7 @@ enum class Component : u32 {
     Camera = 1u << 2,
     Light = 1u << 3,
     Atmosphere = 1u << 4,
+    Mesh = 1u << 5,
 };
 inline Component operator|(Component a, Component b) {
     return static_cast<Component>(static_cast<u32>(a) | static_cast<u32>(b));
@@ -43,6 +44,24 @@ struct TransformComponent {
     Vec3 position{0.0f, 0.0f, 0.0f};
     Vec3 rotation{0.0f, 0.0f, 0.0f};
     Vec3 scale{1.0f, 1.0f, 1.0f};
+};
+
+// ---------------------------------------------------------------------------
+// Mesh component: what the viewport draws for this actor.
+// ---------------------------------------------------------------------------
+
+enum class MeshShape { Cube = 0, Sphere, Cylinder, Cone, Plane };
+const char* MeshShapeName(MeshShape shape);
+const char* const* MeshShapeNames(int& count);
+constexpr int kMeshShapeCount = 5;
+
+struct MeshComponent {
+    MeshShape shape = MeshShape::Cube;
+    Vec3 size{1.0f, 1.0f, 1.0f};          // metres along each local axis
+    Vec3 baseColor{0.62f, 0.66f, 0.72f};  // linear albedo the viewport shades
+    bool visible = true;
+    bool castShadows = true;
+    bool twoSided = false;
 };
 
 enum class StormPreset { Clear = 0, ShelfCloud, Supercell, Tornado, Derecho, HailCore };
@@ -108,6 +127,7 @@ struct Entity {
     u32 components = 0;
 
     TransformComponent transform;
+    MeshComponent mesh;
     WeatherComponent weather;
     CameraComponent camera;
     LightComponent light;
@@ -155,7 +175,10 @@ public:
     bool FromJson(std::string_view text, std::string* error = nullptr);
 
     // Sample content so the editor is never empty on first open.
-    static Scene CreateStormScene(std::string name = "Supercell Intercept");
+    // CreateSampleLevel is the default: a general-purpose level with lighting, a floor,
+    // a few primitive actors and one weather volume showing off the simulation module.
+    static Scene CreateSampleLevel(std::string name = "Level 01 - Sandbox");
+    static Scene CreateStormScene(std::string name = "Storm Sample");
     static Scene CreateEmptyScene(std::string name = "Untitled Scene");
 
 private:
