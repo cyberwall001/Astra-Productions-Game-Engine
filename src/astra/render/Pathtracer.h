@@ -34,12 +34,18 @@ struct TraceSettings {
     bool ambientOcclusion = true;
     bool reflections = true;
     bool denoise = true;
+    // Single-scattering height fog. Draws god rays through the level and hazes distance;
+    // the density itself comes from the level's atmosphere actor.
+    bool volumetrics = true;
+    int volumetricSteps = 20;
     TraceBackend backend = TraceBackend::Cpu;
 };
 
 struct TraceStats {
     int triangles = 0;
     int nodes = 0;
+    float fogDensity = 0.0f;
+    bool cached = false;   // the baked scene came from the cache, no rebuild
     int threads = 0;
     double milliseconds = 0.0;
     std::uint64_t rays = 0;
@@ -81,6 +87,8 @@ public:
     const scene::Vec3& SunDirection() const { return sunDirection_; }
     const scene::Vec3& SunColor() const { return sunColor_; }
     float SunIntensity() const { return sunIntensity_; }
+    float FogDensity() const { return fogDensity_; }
+    float FogHeightFalloff() const { return fogHeightFalloff_; }
     int NodeCount() const { return static_cast<int>(nodes_.size()); }
 
 private:
@@ -102,7 +110,19 @@ private:
     scene::Vec3 sunDirection_{0.0f, -1.0f, 0.0f};
     scene::Vec3 sunColor_{1.0f, 0.95f, 0.88f};
     float sunIntensity_ = 2.4f;
+    float fogDensity_ = 0.0f;         // from the atmosphere actor
+    float fogHeightFalloff_ = 0.12f;  // per metre, denser near the ground
 };
+
+// Baked-scene cache: rebuilds only when the level's content hash changes, so repeated renders
+// of an untouched level skip the BVH build entirely.
+struct TraceCache {
+    TraceScene scene;
+    std::uint64_t hash = 0;
+    int builds = 0;
+};
+
+const TraceScene& GetTraceScene(const scene::Scene& scene, TraceCache& cache);
 
 // Traces a still. `progress` is called from the worker threads with 0..1 and may be null.
 image::Buffer Render(const TraceScene& scene, const Camera& camera, const TraceSettings& settings,

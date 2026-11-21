@@ -522,6 +522,43 @@ void Host::Install(Interpreter& interpreter) {
         Error("unknown shader '" + name + "' (use one of: " + valid + ")");
         return Value(false);
     });
+    define("setAtmosphere", [this](Interpreter&, const std::vector<Value>& a) {
+        // setAtmosphere(fog, clouds, rain) - drives the level's sky actor, which is what the
+        // viewport and the path tracer both read for fog density and volumetrics.
+        scene::Entity* sky = nullptr;
+        for (EntityId id : scene_.Roots()) {
+            scene::Entity* entity = scene_.Find(id);
+            if (entity && entity->Has(scene::Component::Atmosphere)) {
+                sky = entity;
+                break;
+            }
+        }
+        if (sky == nullptr) {
+            for (const scene::Entity& entity : scene_.Entities()) {
+                if (entity.Has(scene::Component::Atmosphere)) {
+                    sky = scene_.Find(entity.id);
+                    break;
+                }
+            }
+        }
+        if (sky == nullptr) Error("setAtmosphere: the level has no atmosphere actor");
+        if (a.size() > 0) sky->atmosphere.fogDensity = std::clamp(
+            static_cast<float>(Number(Arg(a, 0), "setAtmosphere")), 0.0f, 1.0f);
+        if (a.size() > 1) sky->atmosphere.cloudCover = std::clamp(
+            static_cast<float>(Number(Arg(a, 1), "setAtmosphere")), 0.0f, 1.0f);
+        if (a.size() > 2) sky->atmosphere.rainIntensity = std::clamp(
+            static_cast<float>(Number(Arg(a, 2), "setAtmosphere")), 0.0f, 1.0f);
+        scene_.MarkDirty();
+        return Value(true);
+    });
+    define("fogDensity", [this](Interpreter&, const std::vector<Value>&) {
+        for (const scene::Entity& entity : scene_.Entities()) {
+            if (entity.Has(scene::Component::Atmosphere)) {
+                return Value(static_cast<double>(entity.atmosphere.fogDensity));
+            }
+        }
+        return Value(0.0);
+    });
     define("materialNames", [](Interpreter&, const std::vector<Value>&) {
         // Text-authored materials from <project>/materials, the same list the editor shows.
         asset::MaterialLibrary library;

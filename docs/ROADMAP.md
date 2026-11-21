@@ -43,8 +43,11 @@ again: weather is one optional system, not the premise.
       API for scene, mesh, image, IO and math — 60+ built-ins.
 - [x] Script workspace: file column, highlighted editor with a line gutter, run/save shortcuts,
       console, generated-image preview. Non-Astra repositories open here instead of erroring.
-- [x] CPU path tracer: BVH, soft sun shadows, 2-ray AO, metallic reflections, Russian roulette,
+- [x] CPU path tracer: BVH, soft sun shadows, 4-ray AO, metallic reflections, Russian roulette,
       ACES tonemap, denoise, multi-threaded, `Render` panel with live stats and PNG export.
+- [x] Volumetric fog: single-scattering height fog ray-marched through the level with sun
+      shadow rays per step (god rays), driven by the world settings' fog density.
+- [x] Baked-scene cache: the tracer rebuilds its BVH only when the level's content hash changes.
 - [x] Blender bridge: folder-contract addon (`tools/blender/astra_bridge.py`), OBJ + sidecar
       inbox, one-click import into the mesh library, status heartbeat.
 - [x] Mesh/material/particle data layer with a scene mesh library, eight material shaders and
@@ -52,7 +55,7 @@ again: weather is one optional system, not the premise.
 - [x] Undo/redo, duplicate and delete across the whole editor (level snapshots).
 - [x] Rendering: soft sun-aware ground shadows, volumetric light shafts, parallax cloud deck,
       height fog, per-vertex surface shading, alpha.
-- [x] Verified headlessly: 19 suites / 373 assertions, plus `astra_uipreview` interaction tests
+- [x] Verified headlessly: 21 suites / 437 assertions, plus `astra_uipreview` interaction tests
       and screenshots for play mode, the render panel, the script workspace and the bridge.
 
 ## Milestone 4 — GPU renderer and content pipeline

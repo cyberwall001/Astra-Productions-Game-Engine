@@ -260,6 +260,11 @@ public:
     void MarkDirty() { dirty_ = true; }
     void ClearDirty() { dirty_ = false; }
 
+    // Stable 64-bit fingerprint of what the renderer cares about (actors, transforms, meshes,
+    // materials, lights, atmosphere). Renderers cache their baked scene against it, so they
+    // rebuild only when something actually changed.
+    std::uint64_t ContentHash() const;
+
     std::string ToJson() const;
     bool FromJson(std::string_view text, std::string* error = nullptr);
 

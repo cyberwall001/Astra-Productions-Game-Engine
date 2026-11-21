@@ -88,6 +88,21 @@ Vehicle`. A project is never an empty viewport on first launch.
 
 ## Render module (`src/astra/render`)
 
+### Volumetrics
+
+The path tracer integrates single-scattering height fog along the primary ray before the
+Monte Carlo loop runs: one centre ray per pixel gives the depth the fog marches over, each
+step casts a shadow ray towards the sun (that is what turns the sun into shafts), and the
+result is composited as `color * transmittance + inscatter`. Because the fog is a per-pixel
+analytic pass rather than a per-sample one, 20 steps cost roughly 3% of a render instead of
+multiplying it. Density and height falloff come from the level's atmosphere actor, so the
+World Settings fog slider drives both the rasterised viewport and the tracer.
+
+The baked `TraceScene` is cached against `Scene::ContentHash()` (a fingerprint of actors,
+transforms, meshes, materials, lights and atmosphere). Repeated renders of an untouched level
+skip the BVH build; the Render panel reports `BVH cached` / `BVH rebuilt` so the cache is
+visible rather than assumed.
+
 There is no GPU pass in this milestone. The viewport rasterises on the CPU straight into the
 ImGui draw list, which keeps one code path for the GLFW build and the headless preview tool and
 makes the editor fully screenshot-testable.

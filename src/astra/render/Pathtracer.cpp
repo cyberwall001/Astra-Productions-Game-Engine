@@ -116,6 +116,54 @@ Vec3 CosineHemisphere(const Vec3& normal, Rng& rng) {
     return VNormalize(VAdd(VMul(normal, z), VAdd(VMul(tangent, x), VMul(bitangent, y))));
 }
 
+
+// Single scattering through exponential height fog. One shadow ray per step is what turns
+// the sun into visible shafts; the analytic transmittance keeps the result stable at low
+// sample counts (the fog is a per-pixel pass, not part of the Monte Carlo loop).
+struct FogResult {
+    scene::Vec3 inscatter;
+    float transmittance = 1.0f;
+};
+
+FogResult IntegrateFog(const TraceScene& scene, const Vec3& origin, const Vec3& direction,
+                       float maxDistance, int steps, const Vec3& sunDirection, const Vec3& sunColor,
+                       float sunIntensity, const Vec3& ambient, Rng& rng) {
+    FogResult result;
+    const float density = scene.FogDensity();
+    if (density <= 0.0001f || maxDistance <= 0.0f) return result;
+
+    const int count = std::clamp(steps, 1, 96);
+    const float stepLength = maxDistance / static_cast<float>(count);
+    // Henyey-Greenstein-ish forward lobe: looking towards the sun picks up more light.
+    const float cosTheta = VDot(VNormalize(direction), VMul(VNormalize(sunDirection), -1.0f));
+    const float phase = 0.30f + 0.70f * std::pow(std::max(0.0f, cosTheta), 4.0f);
+
+    float jitter = rng.Float();
+    float transmittance = 1.0f;
+    Vec3 inscatter(0.0f, 0.0f, 0.0f);
+    for (int i = 0; i < count; ++i) {
+        const float t = (static_cast<float>(i) + jitter) * stepLength;
+        const Vec3 p = VAdd(origin, VMul(direction, t));
+        const float height = std::max(0.0f, p.y);
+        const float localDensity = density * std::exp(-scene.FogHeightFalloff() * height);
+        if (localDensity <= 1e-6f) continue;
+
+        const float scattering = 1.0f - std::exp(-localDensity * stepLength);
+        const bool lit = !scene.Occluded(VAdd(p, VMul(sunDirection, -0.02f)),
+                                         VMul(sunDirection, -1.0f), 90.0f);
+        const Vec3 sunTerm = lit ? VMulVec(sunColor, VMul(Vec3(1.0f, 1.0f, 1.0f),
+                                                        sunIntensity * phase * 0.40f))
+                                : Vec3(0.0f, 0.0f, 0.0f);
+        inscatter = VAdd(inscatter, VMulVec(VAdd(sunTerm, ambient), VMul(Vec3(1.0f, 1.0f, 1.0f),
+                                                                       transmittance * scattering)));
+        transmittance *= 1.0f - scattering;
+        if (transmittance < 0.02f) break;
+    }
+    result.inscatter = inscatter;
+    result.transmittance = transmittance;
+    return result;
+}
+
 }  // namespace
 
 void TraceScene::Build(const scene::Scene& scene) {
@@ -133,6 +181,10 @@ void TraceScene::Build(const scene::Scene& scene) {
             sunDirection_ = VNormalize(Vec3(entity.atmosphere.sunDirection.x,
                                            -std::fabs(entity.atmosphere.sunDirection.y),
                                            entity.atmosphere.sunDirection.z));
+            // World settings store "how foggy is the world" on a 0..1-ish scale; the tracer wants
+            // a per-metre extinction coefficient, so it is scaled down here.
+            fogDensity_ = std::clamp(entity.atmosphere.fogDensity, 0.0f, 1.0f) * 0.05f;
+            fogHeightFalloff_ = 0.06f + std::clamp(entity.atmosphere.cloudCover, 0.0f, 1.0f) * 0.22f;
         }
         if (entity.Has(scene::Component::Light) &&
             entity.light.type == scene::LightType::Directional) {
@@ -424,6 +476,32 @@ image::Buffer Render(const TraceScene& scene, const Camera& camera, const TraceS
                 if ((y % threadCount) != thread) continue;
                 for (int x = 0; x < width; ++x) {
                     Vec3 color(0.0f, 0.0f, 0.0f);
+
+                    // Volumetric pass: one centre ray gives the depth the fog integrates over.
+                    FogResult fog;
+                    Vec3 centreDirection = forward;
+                    if (settings.volumetrics && scene.FogDensity() > 0.0001f) {
+                        const float sx = ((static_cast<float>(x) + 0.5f) / static_cast<float>(width) *
+                                              2.0f -
+                                          1.0f) *
+                                         tanHalf * aspect;
+                        const float sy =
+                            (1.0f - (static_cast<float>(y) + 0.5f) / static_cast<float>(height) *
+                                        2.0f) *
+                            tanHalf;
+                        centreDirection =
+                            VNormalize(VAdd(forward, VAdd(VMul(right, sx), VMul(up, sy))));
+                        TraceScene::Hit centreHit;
+                        float distance = 140.0f;
+                        if (scene.Intersect(eye, centreDirection, 1e9f, centreHit, &rays)) {
+                            distance = std::min(centreHit.t, 140.0f);
+                        }
+                        fog = IntegrateFog(scene, eye, centreDirection, distance,
+                                           settings.volumetricSteps, sunDirection, scene.SunColor(),
+                                           scene.SunIntensity(),
+                                           VMul(scene.SkyHorizon(), 0.30f), rng);
+                    }
+
                     for (int sample = 0; sample < samples; ++sample) {
                         const float jx = (static_cast<float>(x) + rng.Float()) / static_cast<float>(width);
                         const float jy = (static_cast<float>(y) + rng.Float()) / static_cast<float>(height);
@@ -538,6 +616,10 @@ image::Buffer Render(const TraceScene& scene, const Camera& camera, const TraceS
                     }
                     color = VMul(color, 1.0f / static_cast<float>(samples));
 
+                    if (settings.volumetrics && scene.FogDensity() > 0.0001f) {
+                        color = VAdd(VMul(color, fog.transmittance), fog.inscatter);
+                    }
+
                     // ACES-style tonemap + exposure, then sRGB encode for the PNG. The curve
                     // keeps highlights on the sun disk from clipping to flat white.
                     const float exposure = settings.exposure;
@@ -573,6 +655,7 @@ image::Buffer Render(const TraceScene& scene, const Camera& camera, const TraceS
     if (stats) {
         stats->triangles = scene.TriangleCount();
         stats->nodes = scene.NodeCount();
+        stats->fogDensity = scene.FogDensity();
         stats->threads = threadCount;
         stats->rays = 0;
         for (std::uint64_t count : rayCounts) stats->rays += count;
@@ -590,6 +673,16 @@ bool RenderToFile(const scene::Scene& source, const Camera& camera, const TraceS
     if (scene.Empty()) return false;
     const image::Buffer buffer = Render(scene, camera, settings, stats);
     return image::WritePng(buffer, path);
+}
+
+const TraceScene& GetTraceScene(const scene::Scene& scene, TraceCache& cache) {
+    const std::uint64_t hash = scene.ContentHash();
+    if (cache.builds == 0 || cache.hash != hash) {
+        cache.scene.Build(scene);
+        cache.hash = hash;
+        ++cache.builds;
+    }
+    return cache.scene;
 }
 
 const char* TraceBackendName(TraceBackend backend) {
