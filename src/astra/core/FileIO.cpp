@@ -105,6 +105,13 @@ std::uint64_t FileSize(const std::string& path) {
     return ec ? 0 : static_cast<std::uint64_t>(size);
 }
 
+std::uint64_t ModifiedTime(const std::string& path) {
+    std::error_code ec;
+    const auto time = stdfs::last_write_time(stdfs::u8path(path), ec);
+    if (ec) return 0;
+    return static_cast<std::uint64_t>(time.time_since_epoch().count());
+}
+
 std::vector<std::string> ListDirectory(const std::string& directory) {
     std::vector<std::string> names;
     std::error_code ec;

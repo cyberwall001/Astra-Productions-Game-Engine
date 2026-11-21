@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <map>
+#include <string>
+#include <vector>
 #include <cstdlib>
 #include <numeric>
 #include <cmath>
@@ -27,6 +30,98 @@ using scene::EntityId;
 
 constexpr float kHeaderHeight = 30.0f;
 constexpr float kRowHeight = 26.0f;
+
+// ---------------------------------------------------------------------------
+// Panel moving
+//
+// Panels are hand-positioned chrome rather than ImGui windows, so they carry their own
+// drag state: the header is a grab handle, and the offset added here moves the whole panel
+// (the child content follows, because every panel draws relative to its own cursor).
+// ---------------------------------------------------------------------------
+
+struct PaneState {
+    ImVec2 offset{0.0f, 0.0f};
+    ImVec2 grabStart{0.0f, 0.0f};
+    ImVec2 offsetAtGrab{0.0f, 0.0f};
+    bool dragging = false;
+};
+
+std::map<std::string, PaneState>& Panes() {
+    static std::map<std::string, PaneState> panes;
+    return panes;
+}
+
+bool gFloatingPass = false;
+
+constexpr float kSnapDistance = 26.0f;
+
+void SnapPane(PaneState& pane, ImVec2 pos, ImVec2 size) {
+    // Dropping close to the slot the panel came from re-docks it instead of leaving a
+    // 3-pixel nudge behind, which is what made moving panels feel broken.
+    if (std::fabs(pane.offset.x) < kSnapDistance) pane.offset.x = 0.0f;
+    if (std::fabs(pane.offset.y) < kSnapDistance) pane.offset.y = 0.0f;
+
+    // Keep the header reachable: never let a panel wander off screen.
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    if (pos.x + pane.offset.x < 0.0f) pane.offset.x = -pos.x;
+    if (pos.y + pane.offset.y < 0.0f) pane.offset.y = -pos.y;
+    const float maxX = display.x - U(120.0f);
+    const float maxY = display.y - U(40.0f);
+    if (pos.x + pane.offset.x > maxX) pane.offset.x = maxX - pos.x;
+    if (pos.y + pane.offset.y > maxY) pane.offset.y = maxY - pos.y;
+    (void)size;
+}
+
+bool PaneIsFloating(const char* id) {
+    const auto it = Panes().find(id);
+    return it != Panes().end() &&
+           (std::fabs(it->second.offset.x) > 0.01f || std::fabs(it->second.offset.y) > 0.01f);
+}
+
+// Applies the panel's drag offset to the slot rect and keeps the drag state up to date.
+ImVec2 ApplyPaneOffset(const char* id, ImVec2 pos, ImVec2 size) {
+    PaneState& pane = Panes()[id];
+    if (pane.dragging) {
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+        pane.offset.x = pane.offsetAtGrab.x + (mouse.x - pane.grabStart.x);
+        pane.offset.y = pane.offsetAtGrab.y + (mouse.y - pane.grabStart.y);
+    }
+    SnapPane(pane, pos, size);
+    return ImVec2(pos.x + pane.offset.x, pos.y + pane.offset.y);
+}
+
+// The header is the grab handle. Called by every panel that can be moved.
+//
+// The drag is tracked with raw mouse state rather than an ImGui item: a moving panel swaps
+// into its own child window mid-drag, and an item id does not survive that handover.
+void PanelGrabHandle(const char* id, ImVec2 pos, ImVec2 size, float height, bool enabled) {
+    if (!enabled) return;
+    PaneState& pane = Panes()[id];
+    const ImVec2 handleMax(pos.x + ImMax(U(60.0f), size.x - U(64.0f)), pos.y + height);
+    const bool hovered = ImGui::IsMouseHoveringRect(pos, handleMax);
+    if (hovered && !pane.dragging) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+
+    if (pane.dragging) {
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) pane.dragging = false;
+    } else if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+               !ImGui::IsAnyItemHovered()) {
+        pane.dragging = true;
+        pane.grabStart = ImGui::GetIO().MousePos;
+        pane.offsetAtGrab = pane.offset;
+    }
+}
+
+ImVec2 PaneOffsetFor(const char* id) {
+    const auto it = Panes().find(id);
+    return it == Panes().end() ? ImVec2(0.0f, 0.0f) : it->second.offset;
+}
+
+bool PaneIsDragging() {
+    for (const auto& entry : Panes()) {
+        if (entry.second.dragging) return true;
+    }
+    return false;
+}
 
 ImU32 SeverityColor(log::Level level) {
     switch (level) {
@@ -337,8 +432,26 @@ void ExecuteCommand(AstraApp& app, const std::string& command) {
 
 }  // namespace
 
+// 0 = the panel drew into the editor window, 1 = it opened a backdrop child of its own so a
+// moved panel can paint over its neighbours.
+std::vector<int> gPanelBackdrops;
+
 PanelScope BeginPanel(const char* id, const char* title, ui::Icon icon, ImVec2 pos, ImVec2 size,
-                      const char* badge, ImGuiWindowFlags flags) {
+                      const char* badge, ImGuiWindowFlags flags, bool overlay) {
+    pos = ApplyPaneOffset(id, pos, size);
+
+    // A moved panel is a floating card: it gets its own child window so its surface and header
+    // are drawn on top of whatever it overlaps, instead of behind the viewport's child.
+    const bool floating = overlay || PaneIsFloating(id);
+    gPanelBackdrops.push_back(floating ? 1 : 0);
+    if (floating) {
+        ImGui::SetCursorScreenPos(pos);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, Colors().editorPanel);
+        ImGui::BeginChild(ImGui::GetID(id), size, ImGuiChildFlags_None,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    }
+
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     ImDrawList* dl = window->DrawList;
 
@@ -364,6 +477,9 @@ PanelScope BeginPanel(const char* id, const char* title, ui::Icon icon, ImVec2 p
                     Colors().textFaint, badge);
     }
 
+    // Header grab handle: drag it to move the panel, release near the slot to re-dock.
+    PanelGrabHandle(id, headerMin, size, U(kHeaderHeight), true);
+
     PanelScope scope;
     scope.contentPos = ImVec2(pos.x + U(1.0f), headerMax.y + U(1.0f));
     scope.contentSize = ImVec2(size.x - U(2.0f), size.y - U(kHeaderHeight) - U(2.0f));
@@ -379,6 +495,39 @@ void EndPanel() {
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
+
+    const int backdrop = gPanelBackdrops.empty() ? 0 : gPanelBackdrops.back();
+    if (!gPanelBackdrops.empty()) gPanelBackdrops.pop_back();
+    if (backdrop != 0) {
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+    }
+}
+
+void ResetPanelLayout() {
+    for (auto& entry : Panes()) {
+        entry.second.offset = ImVec2(0.0f, 0.0f);
+        entry.second.dragging = false;
+    }
+}
+
+bool AnyPanelDragging() { return PaneIsDragging(); }
+
+ImVec2 PaneOffset(const char* id) { return PaneOffsetFor(id); }
+
+void SetFloatingPass(bool floating) { gFloatingPass = floating; }
+
+bool PassAllows(const char* id) { return PaneIsFloating(id) == gFloatingPass; }
+
+bool AnyPanelFloating() {
+    for (const auto& entry : Panes()) {
+        if (std::fabs(entry.second.offset.x) > 0.01f ||
+            std::fabs(entry.second.offset.y) > 0.01f) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void Hierarchy(AstraApp& app, ImVec2 pos, ImVec2 size) {
@@ -607,6 +756,7 @@ const char* kEmptyLevelHint = "Empty level - add actors from the Content Browser
 }  // namespace
 
 void Viewport(AstraApp& app, ImVec2 pos, ImVec2 size) {
+    pos = ApplyPaneOffset("##viewport_panel", pos, size);
     ImGuiWindow* window = ImGui::GetCurrentWindow();
     ImDrawList* dl = window->DrawList;
 
@@ -622,6 +772,9 @@ void Viewport(AstraApp& app, ImVec2 pos, ImVec2 size) {
                  Colors().textDim, U(1.5f));
     dl->AddText(Text().small, Text().small->FontSize, ImVec2(pos.x + U(28.0f), headerMax.y - U(21.0f)),
                 Colors().textDim, "Level Viewport");
+
+    // The header drags the viewport like any other panel; the body keeps its own camera input.
+    PanelGrabHandle("##viewport_panel", pos, size, U(kHeaderHeight), !app.editor.playing);
 
     const render::Stats& previous = app.editor.viewportStats;
     const std::string readout =
@@ -676,7 +829,8 @@ void Viewport(AstraApp& app, ImVec2 pos, ImVec2 size) {
     } else if (hovered && io.MouseWheel != 0.0f) {
         camera.Zoom(io.MouseWheel);
     }
-    if (active && !possessed) {
+    // A dragged panel header must not also orbit the camera behind it.
+    if (active && !possessed && !PaneIsDragging()) {
         // Unreal bindings: right drag looks around, middle drag pans, Alt+left does both
         // for trackpads that have no middle button.
         const bool orbit = ImGui::IsMouseDragging(ImGuiMouseButton_Right) ||

@@ -114,8 +114,16 @@ void MenuBar(AstraApp& app, ImVec2 min, float width) {
                 if (ImGui::MenuItem("Render frame (path tracer)")) {
                     app.editor.showRenderPanel = true;
                 }
+                if (ImGui::MenuItem("Reload materials from disk")) {
+                    app.editor.materials.Scan(app.editor.materials.Directory());
+                    app.SetFooterStatus("Materials reloaded");
+                }
                 if (ImGui::MenuItem("World settings")) {
                     app.editor.showWorldSettings = !app.editor.showWorldSettings;
+                }
+                if (ImGui::MenuItem("Material editor")) {
+                    if (app.editor.materials.All().empty()) app.LoadMaterials();
+                    app.editor.showMaterialEditor = !app.editor.showMaterialEditor;
                 }
                 if (ImGui::MenuItem("Import asset (OBJ)...")) {
                     app.PushToast(ToastKind::Info, "Asset import",
@@ -143,6 +151,10 @@ void MenuBar(AstraApp& app, ImVec2 min, float width) {
                 ImGui::MenuItem("Content Browser / Output Log", nullptr, &app.editor.showConsole);
                 ImGui::MenuItem("Statistics", nullptr, &app.editor.showStatistics);
                 ImGui::Separator();
+                if (ImGui::MenuItem("Reset panel positions")) {
+                    panels::ResetPanelLayout();
+                    app.SetFooterStatus("Panel positions reset - drag a panel header to move it");
+                }
                 if (ImGui::MenuItem("Reset layout")) {
                     app.editor.showHierarchy = true;
                     app.editor.showInspector = true;
@@ -387,10 +399,7 @@ void Editor(AstraApp& app) {
     const float rightWidth = app.editor.showInspector ? ImClamp(width * 0.23f, U(268.0f), U(340.0f)) : 0.0f;
 
     float cursorX = min.x + U(kGap);
-    if (app.editor.showHierarchy) {
-        panels::Hierarchy(app, ImVec2(cursorX, bodyTop), ImVec2(leftWidth, bodyHeight));
-        cursorX += leftWidth + U(kGap);
-    }
+    if (app.editor.showHierarchy) cursorX += leftWidth + U(kGap);
 
     const float rightEdge = max.x - U(kGap) - (app.editor.showInspector ? rightWidth + U(kGap) : 0.0f);
     const float centerWidth = ImMax(U(320.0f), rightEdge - cursorX);
@@ -398,25 +407,47 @@ void Editor(AstraApp& app) {
         app.editor.showConsole ? ImClamp(bodyHeight * 0.28f, U(150.0f), U(220.0f)) : 0.0f;
     const float viewportHeight = bodyHeight - (app.editor.showConsole ? drawerHeight + U(kGap) : 0.0f);
 
-    panels::Viewport(app, ImVec2(cursorX, bodyTop), ImVec2(centerWidth, viewportHeight));
-    if (app.editor.showConsole) {
-        panels::BottomPanel(app, ImVec2(cursorX, bodyTop + viewportHeight + U(kGap)),
-                            ImVec2(centerWidth, drawerHeight));
-    }
+    const float statsHeight = app.editor.showStatistics
+                                  ? ImClamp(bodyHeight * 0.32f, U(160.0f), U(230.0f))
+                                  : 0.0f;
 
-    if (app.editor.showInspector) {
-        const float statsHeight = app.editor.showStatistics ? ImClamp(bodyHeight * 0.32f, U(160.0f), U(230.0f)) : 0.0f;
-        panels::Inspector(app, ImVec2(rightEdge + U(kGap), bodyTop),
-                          ImVec2(rightWidth, bodyHeight - (statsHeight > 0.0f ? statsHeight + U(kGap) : 0.0f)));
-        if (app.editor.showStatistics) {
+    // Two passes: docked panels first, then any panel the user dragged somewhere else, so a
+    // floating panel is never painted underneath its neighbours.
+    const bool anyFloating = panels::AnyPanelFloating();
+    const auto drawPanels = [&](bool floatingPass) {
+        panels::SetFloatingPass(floatingPass);
+        if (panels::PassAllows("##viewport_panel")) {
+            panels::Viewport(app, ImVec2(cursorX, bodyTop), ImVec2(centerWidth, viewportHeight));
+        }
+        if (app.editor.showConsole && panels::PassAllows("##console_panel")) {
+            panels::BottomPanel(app, ImVec2(cursorX, bodyTop + viewportHeight + U(kGap)),
+                                ImVec2(centerWidth, drawerHeight));
+        }
+        if (app.editor.showHierarchy && panels::PassAllows("##hierarchy_panel")) {
+            panels::Hierarchy(app, ImVec2(min.x + U(kGap), bodyTop),
+                              ImVec2(leftWidth, bodyHeight));
+        }
+        if (app.editor.showInspector && panels::PassAllows("##details_panel")) {
+            panels::Inspector(
+                app, ImVec2(rightEdge + U(kGap), bodyTop),
+                ImVec2(rightWidth,
+                       bodyHeight - (statsHeight > 0.0f ? statsHeight + U(kGap) : 0.0f)));
+        }
+        if (app.editor.showInspector && app.editor.showStatistics &&
+            panels::PassAllows("##stats_panel")) {
             panels::Statistics(app,
                                ImVec2(rightEdge + U(kGap), bodyTop + bodyHeight - statsHeight),
                                ImVec2(rightWidth, statsHeight));
         }
-    }
+    };
+
+    drawPanels(false);
+    if (anyFloating) drawPanels(true);
+    panels::SetFloatingPass(false);
 
     panels::RenderPanel(app);
     panels::WorldSettings(app);
+    panels::MaterialEditor(app);
 
     StatusBar(app, ImVec2(min.x, max.y - U(kStatusHeight)), width, U(kStatusHeight));
 

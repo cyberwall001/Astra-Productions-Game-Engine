@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "astra/app/Settings.h"
+#include "astra/asset/Material.h"
 #include "astra/auth/AuthService.h"
 #include "astra/github/GitHubClient.h"
 #include "astra/licensing/AccessCode.h"
@@ -158,6 +159,13 @@ struct EditorState {
     int materialPreset = 0;
     int particlePresetIndex = 0;
 
+    // ---- material assets (authoring + hot reload) -------------------------
+    asset::MaterialLibrary materials;
+    int materialIndex = 0;
+    bool showMaterialEditor = false;
+    float materialReloadTimer = 0.0f;
+    std::string materialStatus;
+
     int consoleFilter = 0;  // 0 all, 1 info, 2 warn, 3 error
     std::string consoleInput;
     std::vector<std::string> consoleHistory;
@@ -262,6 +270,12 @@ struct AstraApp {
     bool SaveScript();
     bool RunScript();
     void NewScript(std::string fileName = "untitled.astra");
+
+    // ---- material assets -------------------------------------------------
+    // Scans <project>/materials (seeding starters), then hot reloads changed files.
+    void LoadMaterials();
+    void PollMaterialHotReload(float dt);
+    bool ApplyMaterialToSelection(const std::string& name);
 
     // ---- offline rendering ----------------------------------------------
     void StartTrace();

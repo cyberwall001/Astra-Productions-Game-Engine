@@ -10,12 +10,14 @@
 #include "astra/app/Screens.h"
 #include "astra/asset/Bridge.h"
 #include "astra/app/screens/Common.h"
+#include "astra/app/screens/EditorPanels.h"
 #include "astra/core/Log.h"
 #include "astra/core/Strings.h"
 #include "astra/render/Pathtracer.h"
 #include "astra/ui/Theme.h"
 #include "astra/ui/Widgets.h"
 #include "imgui.h"
+#include "imgui_internal.h"
 
 namespace astra::app::panels {
 namespace {
@@ -259,6 +261,235 @@ void RenderPanel(AstraApp& app) {
     }
 
     ImGui::End();
+}
+
+// Draws a shaded swatch for a material: the same procedural patterns the viewport uses,
+// reduced to a 2D preview so the editor can show the result without a render target.
+void DrawMaterialPreview(ImDrawList* dl, ImVec2 centre, float radius,
+                         const asset::MaterialAsset& material) {
+    const auto toColor = [](const scene::Vec3& color) {
+        const float alpha = std::clamp(color.x * 0.0f + 1.0f, 0.0f, 1.0f);
+        return ImGui::ColorConvertFloat4ToU32(
+            ImVec4(std::clamp(color.x, 0.0f, 1.0f), std::clamp(color.y, 0.0f, 1.0f),
+                   std::clamp(color.z, 0.0f, 1.0f), alpha));
+    };
+    const ImU32 base = toColor(material.baseColor);
+    const ImU32 accent = toColor(material.accentColor);
+    dl->AddCircleFilled(centre, radius, ui::Fade(base, 0.55f), 48);
+
+    const ImVec2 min(centre.x - radius, centre.y - radius);
+    const ImVec2 max(centre.x + radius, centre.y + radius);
+    const int shader = static_cast<int>(material.shader);
+    // Only the clip circle is filled, so every pattern stays inside the sphere.
+    dl->PushClipRect(min, max, true);
+    if (shader == static_cast<int>(scene::MaterialShader::Checker)) {
+        const float cell = ImMax(4.0f, radius / 4.0f);
+        for (float y = min.y; y < max.y; y += cell) {
+            for (float x = min.x; x < max.x; x += cell) {
+                const int checker = (static_cast<int>((x - min.x) / cell) +
+                                     static_cast<int>((y - min.y) / cell)) & 1;
+                dl->AddRectFilled(ImVec2(x, y), ImVec2(x + cell, y + cell),
+                                  checker ? base : accent);
+            }
+        }
+    } else if (shader == static_cast<int>(scene::MaterialShader::Stripes)) {
+        const float band = ImMax(3.0f, radius / 6.0f);
+        for (float y = min.y; y < max.y; y += band * 2.0f) {
+            dl->AddRectFilled(ImVec2(min.x, y), ImVec2(max.x, y + band), accent);
+        }
+        dl->AddCircleFilled(centre, radius * 0.55f, base, 40);
+    } else if (shader == static_cast<int>(scene::MaterialShader::Noise) ||
+               shader == static_cast<int>(scene::MaterialShader::Gradient)) {
+        dl->AddRectFilledMultiColor(min, max, accent, base, base, accent);
+        dl->AddCircleFilled(centre, radius * 0.62f, ui::Fade(base, 0.55f), 40);
+    } else {
+        dl->AddCircleFilled(centre, radius, base, 48);
+        if (shader == static_cast<int>(scene::MaterialShader::Hologram)) {
+            for (float y = min.y; y < max.y; y += ImMax(3.0f, radius / 7.0f)) {
+                dl->AddLine(ImVec2(min.x, y), ImVec2(max.x, y), ui::Fade(accent, 0.65f),
+                            ImMax(1.0f, U(1.0f)));
+            }
+        }
+    }
+    dl->PopClipRect();
+
+    // A soft top-left highlight sells the "lit sphere" read.
+    dl->AddCircleFilled(ImVec2(centre.x - radius * 0.32f, centre.y - radius * 0.34f),
+                        radius * 0.34f, ui::Fade(IM_COL32(255, 255, 255, 255), 0.16f), 32);
+    dl->AddCircle(centre, radius, ui::Fade(IM_COL32(255, 255, 255, 255), 0.22f), 48,
+                  ImMax(1.0f, U(1.0f)));
+}
+
+void MaterialEditor(AstraApp& app) {
+    if (!app.editor.showMaterialEditor) return;
+
+    // A real ImGui window so it can be dragged like any other tool window. The height is
+    // fixed: the columns are laid out by hand, so shrinking would clip fields instead of
+    // reflowing them.
+    ImGui::SetNextWindowSize(ImVec2(U(700.0f), U(452.0f)), ImGuiCond_Always);
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->Size.x * 0.5f - U(350.0f), U(96.0f)),
+                            ImGuiCond_FirstUseEver);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, Colors().editorPanel);
+    bool open = true;
+    if (!ImGui::Begin("Material Editor", &open)) {
+        ImGui::End();
+        ImGui::PopStyleColor();
+        if (!open) app.editor.showMaterialEditor = false;
+        return;
+    }
+    if (!open) app.editor.showMaterialEditor = false;
+
+    asset::MaterialLibrary& library = app.editor.materials;
+    const auto& materials = library.All();
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    ImDrawList* dl = window->DrawList;
+    const float sizeX = ImGui::GetContentRegionAvail().x;
+    const float left = window->DC.CursorStartPos.x;
+    float y = window->DC.CursorStartPos.y;
+    const float listWidth = U(176.0f);
+    const float fieldX = left + listWidth + U(22.0f);
+    const float fieldWidth = ImMax(U(180.0f), sizeX - listWidth - U(24.0f));
+    const float rowHeight = U(27.0f);
+
+    if (materials.empty()) {
+        dl->AddText(Text().small, Text().small->FontSize, ImVec2(left, y), Colors().textDim,
+                    "No materials yet - open a project to seed <project>/materials.");
+        ImGui::End();
+        ImGui::PopStyleColor();
+        return;
+    }
+
+    app.editor.materialIndex =
+        std::clamp(app.editor.materialIndex, 0, static_cast<int>(materials.size()) - 1);
+    asset::MaterialAsset& material =
+        const_cast<asset::MaterialAsset&>(materials[static_cast<std::size_t>(app.editor.materialIndex)]);
+
+    // ---- library list on a sunken card ------------------------------------
+    const float listHeight = U(206.0f);
+    dl->AddRectFilled(ImVec2(left - U(6.0f), y - U(6.0f)),
+                      ImVec2(left + listWidth + U(6.0f), y + listHeight + U(6.0f)),
+                      Colors().surfaceSunken, U(8.0f));
+    dl->AddRect(ImVec2(left - U(6.0f), y - U(6.0f)),
+                ImVec2(left + listWidth + U(6.0f), y + listHeight + U(6.0f)), Colors().stroke,
+                U(8.0f), 0, U(1.0f));
+    ImGui::SetCursorScreenPos(ImVec2(left, y));
+    ImGui::PushStyleColor(ImGuiCol_Header, ui::ToVec4(ui::Fade(Colors().brand, 0.28f)));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ui::ToVec4(Colors().surfaceHover));
+    ImGui::BeginChild("##material_list", ImVec2(listWidth, listHeight), ImGuiChildFlags_None);
+    for (int i = 0; i < static_cast<int>(materials.size()); ++i) {
+        ImGui::PushID(i);
+        ImGui::PushStyleColor(ImGuiCol_Text, ui::ToVec4(Colors().textDim));
+        if (ImGui::Selectable(materials[i].name.c_str(), i == app.editor.materialIndex,
+                              ImGuiSelectableFlags_None, ImVec2(0.0f, U(24.0f)))) {
+            app.editor.materialIndex = i;
+        }
+        ImGui::PopStyleColor();
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor(2);
+
+    DrawMaterialPreview(dl, ImVec2(left + listWidth * 0.5f, y + listHeight + U(92.0f)), U(58.0f),
+                        material);
+    const char* shaderLabel = scene::MaterialShaderName(material.shader);
+    dl->AddText(Text().tiny, Text().tiny->FontSize,
+                ImVec2(left + listWidth * 0.5f -
+                           Text().tiny->CalcTextSizeA(Text().tiny->FontSize, FLT_MAX, 0.0f,
+                                                      shaderLabel)
+                                   .x *
+                               0.5f,
+                       y + listHeight + U(156.0f)),
+                Colors().textFaint, shaderLabel);
+
+    // ---- fields ------------------------------------------------------------
+    float fieldY = y;
+    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(fieldX, fieldY), Colors().textFaint,
+                "MATERIAL");
+    fieldY += U(20.0f);
+
+    char nameBuffer[96];
+    std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", material.name.c_str());
+    ImGui::SetCursorScreenPos(ImVec2(fieldX, fieldY));
+    ImGui::SetNextItemWidth(fieldWidth);
+    if (ImGui::InputText("##material_name", nameBuffer, sizeof(nameBuffer))) {
+        material.name = nameBuffer;
+    }
+    fieldY += rowHeight + U(8.0f);
+
+    auto label = [&](const char* text, float rowY) {
+        dl->AddText(Text().small, Text().small->FontSize, ImVec2(fieldX, rowY + U(5.0f)),
+                    Colors().textDim, text);
+    };
+
+    label("Shader", fieldY);
+    ImGui::SetCursorScreenPos(ImVec2(fieldX + U(96.0f), fieldY));
+    ImGui::SetNextItemWidth(fieldWidth - U(96.0f));
+    int shaderIndex = static_cast<int>(material.shader);
+    int shaderCount = 0;
+    const char* const* shaderNames = scene::MaterialShaderNames(shaderCount);
+    if (ImGui::Combo("##material_shader", &shaderIndex, shaderNames, shaderCount)) {
+        material.shader = static_cast<scene::MaterialShader>(shaderIndex);
+    }
+    fieldY += rowHeight + U(6.0f);
+
+    auto colorRow = [&](const char* text, const char* id, scene::Vec3& color) {
+        label(text, fieldY);
+        ImGui::SetCursorScreenPos(ImVec2(fieldX + U(96.0f), fieldY));
+        ImGui::SetNextItemWidth(fieldWidth - U(96.0f));
+        ImGui::ColorEdit3(id, &color.x, ImGuiColorEditFlags_Float | ImGuiColorEditFlags_NoInputs);
+        fieldY += rowHeight + U(2.0f);
+    };
+    colorRow("Base", "##material_base", material.baseColor);
+    colorRow("Accent", "##material_accent", material.accentColor);
+
+    fieldY += U(4.0f);
+    auto sliderRow = [&](const char* text, const char* id, float& value, float minValue,
+                         float maxValue, const char* format) {
+        label(text, fieldY);
+        ImGui::SetCursorScreenPos(ImVec2(fieldX + U(96.0f), fieldY));
+        ImGui::SetNextItemWidth(fieldWidth - U(96.0f));
+        ImGui::SliderFloat(id, &value, minValue, maxValue, format);
+        fieldY += rowHeight - U(2.0f);
+    };
+    sliderRow("Roughness", "##material_roughness", material.roughness, 0.02f, 1.0f, "%.2f");
+    sliderRow("Metallic", "##material_metallic", material.metallic, 0.0f, 1.0f, "%.2f");
+    sliderRow("Emissive", "##material_emissive", material.emissive, 0.0f, 4.0f, "%.2f");
+    sliderRow("UV scale", "##material_uv", material.uvScale, 0.25f, 24.0f, "%.1f");
+
+    // ---- actions -----------------------------------------------------------
+    fieldY += U(10.0f);
+    ImGui::SetCursorScreenPos(ImVec2(fieldX, fieldY));
+    if (ui::PrimaryButton("Save", ImVec2(U(92.0f), U(28.0f)), true, ui::Icon::Save)) {
+        if (library.Save(material)) {
+            app.editor.materialStatus = "Saved " + material.name;
+            app.SetFooterStatus(app.editor.materialStatus);
+        }
+    }
+    ImGui::SameLine(0.0f, U(6.0f));
+    if (ui::SecondaryButton("Assign to selection", ImVec2(U(150.0f), U(28.0f)), true)) {
+        app.ApplyMaterialToSelection(material.name);
+    }
+    ImGui::SameLine(0.0f, U(6.0f));
+    if (ui::SecondaryButton("Reload", ImVec2(U(84.0f), U(28.0f)), true)) {
+        library.Scan(library.Directory());
+        app.SetFooterStatus("Materials reloaded from disk");
+    }
+
+    // ---- footer -------------------------------------------------------------
+    float footerY = y + listHeight + U(176.0f);
+    dl->AddLine(ImVec2(left, footerY), ImVec2(left + listWidth + fieldWidth + U(16.0f), footerY),
+                Colors().stroke, U(1.0f));
+    footerY += U(10.0f);
+    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, footerY), Colors().textFaint,
+                str::Ellipsis("HOT RELOAD  " + library.Directory(), 104).c_str());
+    if (!app.editor.materialStatus.empty()) {
+        dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, footerY + U(16.0f)),
+                    Colors().success, str::Ellipsis(app.editor.materialStatus, 104).c_str());
+    }
+
+    ImGui::SetCursorScreenPos(ImVec2(left, footerY + U(30.0f)));
+    ImGui::End();
+    ImGui::PopStyleColor();
 }
 
 void WorldSettings(AstraApp& app) {

@@ -8,6 +8,7 @@
 #include <random>
 
 #include "astra/asset/Bridge.h"
+#include "astra/asset/Material.h"
 #include "astra/asset/MeshBuilder.h"
 #include "astra/core/FileIO.h"
 #include "astra/core/Strings.h"
@@ -520,6 +521,30 @@ void Host::Install(Interpreter& interpreter) {
         }
         Error("unknown shader '" + name + "' (use one of: " + valid + ")");
         return Value(false);
+    });
+    define("materialNames", [](Interpreter&, const std::vector<Value>&) {
+        // Text-authored materials from <project>/materials, the same list the editor shows.
+        asset::MaterialLibrary library;
+        library.Scan(asset::MaterialLibrary::DefaultDirectory());
+        Value list = Value::MakeArray();
+        for (const asset::MaterialAsset& material : library.All()) {
+            list.array->items.push_back(Value(material.name));
+        }
+        return list;
+    });
+    define("applyMaterial", [this](Interpreter&, const std::vector<Value>& a) {
+        // applyMaterial(actor, "Brushed Steel") - assigns an authored material asset.
+        Entity* entity = scene_.Find(static_cast<EntityId>(Integer(Arg(a, 0), "applyMaterial")));
+        if (!entity) Error("applyMaterial: no such actor");
+        const std::string name = Text(Arg(a, 1), "applyMaterial");
+        asset::MaterialLibrary library;
+        library.Scan(asset::MaterialLibrary::DefaultDirectory());
+        if (!asset::MaterialLibrary::ApplyTo(scene_, entity->id, name, library)) {
+            Error("applyMaterial: unknown material '" + name + "'");
+            return Value(false);
+        }
+        scene_.MarkDirty();
+        return Value(true);
     });
     define("setAccent", [this](Interpreter&, const std::vector<Value>& a) {
         Entity* entity = scene_.Find(static_cast<EntityId>(Integer(Arg(a, 0), "setAccent")));

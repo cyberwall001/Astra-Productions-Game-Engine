@@ -23,6 +23,9 @@ editor chrome hidden. Next to it sit three new subsystems:
   shadows, ambient occlusion, metallic reflections, ACES tonemap) and saves a PNG.
 - **Blender bridge** — a folder-based addon (`tools/blender/astra_bridge.py`) sends meshes
   straight into the level's mesh library. See [docs/BLENDER_BRIDGE.md](docs/BLENDER_BRIDGE.md).
+* **Authored materials** — `*.astramat` text files in `<project>/materials`, hot reloaded while
+  you edit them, with a Material Editor window and a scripted `applyMaterial()`. See
+  [docs/MATERIALS.md](docs/MATERIALS.md).
 
 Under the hood: real mesh/material/particle data, soft ground shadows, volumetric light shafts
 and a cloud deck, undo/redo across the whole editor, and the UE panel vocabulary
@@ -178,6 +181,7 @@ tools/                packaging, screenshot capture, PNG recompression, Blender 
 ## Documentation
 
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — layers, threading, on-disk layout, verification strategy
+* [docs/MATERIALS.md](docs/MATERIALS.md) — the `*.astramat` material format, hot reload and the Material Editor
 * [docs/SCRIPTING.md](docs/SCRIPTING.md) — the AstraScript language, built-ins and examples
 * [docs/BLENDER_BRIDGE.md](docs/BLENDER_BRIDGE.md) — installing the Blender addon and importing meshes
 * [docs/SECURITY.md](docs/SECURITY.md) — access codes, accounts, secrets at rest, network surface

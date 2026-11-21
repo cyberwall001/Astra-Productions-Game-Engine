@@ -17,6 +17,8 @@
 #include <vector>
 
 #include "astra/app/AstraApp.h"
+#include "astra/app/screens/EditorPanels.h"
+#include "astra/asset/Material.h"
 #include "astra/asset/Bridge.h"
 #include "astra/asset/MeshBuilder.h"
 #include "astra/render/ViewportRenderer.h"
@@ -406,6 +408,33 @@ void ShotEditor(astra::app::AstraApp& app) {
     }
     RenderFrame([&] { app.Draw(); });
 
+    // ---- panel moving: drag the World Outliner header ----------------------
+    {
+        const ImVec2 grab{viewport.min.x * 0.0f + 110.0f, viewport.min.y * 0.0f + 99.0f};
+        const ImVec2 before = astra::app::panels::PaneOffset("##hierarchy_panel");
+        MouseMove(grab.x, grab.y);
+        RenderFrame([&] { app.Draw(); });
+        MouseButton(0, true);
+        RenderFrame([&] { app.Draw(); });
+        for (int i = 1; i <= 6; ++i) {
+            MouseMove(grab.x + static_cast<float>(i) * 14.0f,
+                      grab.y + static_cast<float>(i) * 6.0f);
+            RenderFrame([&] { app.Draw(); });
+        }
+        MouseButton(0, false);
+        RenderFrame([&] { app.Draw(); });
+        RenderFrame([&] { app.Draw(); });
+        const ImVec2 after = astra::app::panels::PaneOffset("##hierarchy_panel");
+        Check(after.x > 40.0f && after.y > 15.0f, "dragging a panel header moved the panel");
+        Check(!astra::app::panels::AnyPanelDragging(), "panel drag ended on mouse release");
+        Save("09-panels-moved");
+
+        astra::app::panels::ResetPanelLayout();
+        RenderFrame([&] { app.Draw(); });
+        const ImVec2 reset = astra::app::panels::PaneOffset("##hierarchy_panel");
+        Check(reset.x == before.x && reset.y == before.y, "reset put the panel back on its slot");
+    }
+
     // Same level, wireframe view mode with the cone framed.
     app.editor.viewport.mode = astra::render::ViewMode::Wireframe;
     app.editor.tool = 1;
@@ -455,6 +484,44 @@ void ShotPlay(astra::app::AstraApp& app) {
     app.ExitPlay();
     RenderFrame([&] { app.Draw(); });
     Check(!app.editor.playing, "stop ended the play session");
+}
+
+void ShotMaterialEditor(astra::app::AstraApp& app) {
+    // The editor scans the real material folder (seeding starters on first run).
+    app.LoadMaterials();
+    app.editor.showMaterialEditor = true;
+    app.editor.showRenderPanel = false;
+    if (astra::scene::Entity* cube = app.editor.scene.FindByName("Cube")) {
+        app.editor.selected = cube->id;
+    }
+    for (int i = 0; i < 3; ++i) RenderFrame([&] { app.Draw(); });
+    Check(app.editor.materials.All().size() >= 4, "material library loaded authored assets");
+    Save("22-material-editor");
+
+    // Assigning through the real command must reach the actor and push undo.
+    const std::size_t undoBefore = app.editor.undo.size();
+    const bool applied = app.ApplyMaterialToSelection("Hologram Panel");
+    RenderFrame([&] { app.Draw(); });
+    Check(applied, "assigned a material asset to the selection");
+    Check(app.editor.undo.size() == undoBefore + 1, "material assignment is undoable");
+    const astra::scene::Entity* cube = app.editor.scene.FindByName("Cube");
+    Check(cube != nullptr && cube->Has(astra::scene::Component::Material) &&
+              cube->material.shader == astra::scene::MaterialShader::Hologram,
+          "material shader reached the actor");
+
+    // Editing a value and saving must hit the file on disk.
+    const std::string directory = app.editor.materials.Directory();
+    const std::string path = astra::paths::Join(directory, "Hologram_Panel.astramat");
+    if (astra::asset::MaterialAsset* material = app.editor.materials.FindMutable("Hologram Panel")) {
+        material->emissive = 2.5f;
+        Check(app.editor.materials.Save(*material), "saved the edited material");
+        std::string text;
+        Check(astra::fs::ReadTextFile(path, text) && text.find("2.5") != std::string::npos,
+              "edited material reached disk");
+    }
+    RenderFrame([&] { app.Draw(); });
+    Save("23-material-editor-applied");
+    app.editor.showMaterialEditor = false;
 }
 
 void ShotRenderPanel(astra::app::AstraApp& app) {
@@ -709,6 +776,7 @@ int main(int argc, char** argv) {
     ShotEditor(app);
     ShotPlay(app);
     ShotRenderPanel(app);
+    ShotMaterialEditor(app);
     ShotScriptEditor(app);
     ShotBlenderImport(app);
     ShotSettings(app);
