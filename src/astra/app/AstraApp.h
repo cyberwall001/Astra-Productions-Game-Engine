@@ -265,6 +265,8 @@ struct AstraApp {
 
     // ---- offline rendering ----------------------------------------------
     void StartTrace();
+    // Pulls every mesh waiting in the Blender bridge inbox into the open level.
+    void ImportFromBlender();
     bool SaveTraceImage(std::string path = {});
 
     std::string GitHubToken() const;

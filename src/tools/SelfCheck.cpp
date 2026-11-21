@@ -31,6 +31,7 @@
 #include "astra/image/Image.h"
 #include "astra/render/Camera.h"
 #include "astra/game/Player.h"
+#include "astra/asset/Bridge.h"
 #include "astra/asset/MeshBuilder.h"
 #include "astra/render/Pathtracer.h"
 #include "astra/script/Host.h"
@@ -691,6 +692,82 @@ void TestPresets() {
     }
 }
 
+void TestBlenderBridge() {
+    // Start from an empty inbox so the assertions are about this run only.
+    const std::string inbox = astra::asset::InboxDirectory();
+    for (const std::string& entry : astra::fs::ListDirectory(inbox)) {
+        std::remove(astra::paths::Join(inbox, entry).c_str());
+    }
+    CHECK(astra::asset::ScanInbox().empty());
+
+    // The addon writes OBJ + a JSON sidecar; the engine side must accept that exact shape.
+    std::string error;
+    CHECK(astra::asset::WriteBridgeJob("bridge_cube", astra::asset::MakeSphere(12, 8), "Hologram",
+                                       &error));
+    const std::vector<astra::asset::BridgeJob> jobs = astra::asset::ScanInbox();
+    CHECK_EQ(jobs.size(), std::size_t(1));
+    if (!jobs.empty()) {
+        CHECK_EQ(jobs[0].name, std::string("bridge_cube"));
+        CHECK_EQ(jobs[0].material, std::string("Hologram"));
+        CHECK(!jobs[0].placeholder);
+    }
+
+    astra::scene::Scene scene = astra::scene::Scene::CreateEmptyScene("bridge");
+    const std::size_t before = scene.Count();
+    const std::size_t meshesBefore = scene.Meshes().size();
+    const astra::asset::BridgeImportResult result = astra::asset::ImportInbox(scene);
+    CHECK_EQ(result.imported, 1);
+    CHECK_EQ(result.skipped, 0);
+    CHECK_EQ(scene.Count(), before + 1);
+    CHECK_EQ(scene.Meshes().size(), meshesBefore + 1);
+    CHECK(!result.actorNames.empty());
+
+    const astra::scene::Entity* actor =
+        result.actorNames.empty() ? nullptr : scene.FindByName(result.actorNames.front());
+    CHECK(actor != nullptr);
+    if (actor) {
+        CHECK(actor->mesh.shape == astra::scene::MeshShape::Custom);
+        CHECK(actor->mesh.meshId >= 1);
+        CHECK(actor->material.shader == astra::scene::MaterialShader::Hologram);
+        CHECK(actor->tag == "blender");
+        const astra::scene::MeshAsset* mesh = scene.Mesh(actor->mesh.meshId);
+        CHECK(mesh != nullptr);
+        if (mesh) CHECK(!mesh->Empty());
+    }
+
+    // Imports are moved aside, so a second scan is empty and a second import is a no-op.
+    CHECK(astra::asset::ScanInbox().empty());
+    const astra::asset::BridgeImportResult again = astra::asset::ImportInbox(scene);
+    CHECK_EQ(again.imported, 0);
+
+    // Placeholder jobs (Blender connected but nothing exported yet) are skipped, not errors.
+    std::string placeholder = "{\"name\": \"wip\", \"placeholder\": true}";
+    CHECK(astra::fs::WriteTextFileAtomic(astra::paths::Join(inbox, "wip.json"), placeholder));
+    std::string obj = "o wip\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+    CHECK(astra::fs::WriteTextFileAtomic(astra::paths::Join(inbox, "wip.obj"), obj));
+    const astra::asset::BridgeImportResult skipped = astra::asset::ImportInbox(scene, false);
+    CHECK_EQ(skipped.imported, 0);
+    CHECK_EQ(skipped.skipped, 1);
+
+    // A malformed OBJ is reported, never fatal.
+    std::remove(astra::paths::Join(inbox, "wip.json").c_str());
+    CHECK(astra::fs::WriteTextFileAtomic(astra::paths::Join(inbox, "wip.obj"),
+                                         std::string("this is not an obj\n")));
+    const astra::asset::BridgeImportResult broken = astra::asset::ImportInbox(scene, false);
+    CHECK_EQ(broken.imported, 0);
+    CHECK(!broken.errors.empty());
+    std::remove(astra::paths::Join(inbox, "wip.obj").c_str());
+
+    // Status reporting tolerates a missing file and reads the addon's heartbeat.
+    CHECK(astra::asset::BlenderStatus() != "");
+    CHECK(astra::fs::WriteTextFileAtomic(
+        astra::asset::StatusPath(),
+        std::string("{\"blender\": \"4.2.1\", \"scene\": \"Level\", \"timestamp\": 12}")));
+    const std::string status = astra::asset::BlenderStatus();
+    CHECK(status.find("4.2.1") != std::string::npos);
+    CHECK(status.find("Level") != std::string::npos);
+}
+
 void TestViewport() {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -1080,6 +1157,7 @@ const TestCase kTests[] = {
     {"render.pathtracer", TestPathtracer},
     {"scene.presets", TestPresets},
     {"game.player", TestPlayer},
+    {"bridge.blender", TestBlenderBridge},
     {"script.language", TestScript},
     {"project.files", TestProjects},
     {"github.parsing", TestGitHubParsing},

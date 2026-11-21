@@ -8,6 +8,7 @@
 #include <string>
 
 #include "astra/app/Screens.h"
+#include "astra/asset/Bridge.h"
 #include "astra/app/screens/Common.h"
 #include "astra/core/Log.h"
 #include "astra/core/Strings.h"
@@ -364,6 +365,25 @@ void WorldSettings(AstraApp& app) {
     y += U(38.0f);
     dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textFaint,
                 render::TraceBackendName(app.editor.trace.backend));
+    y += U(20.0f);
+
+    dl->AddLine(ImVec2(left, y), ImVec2(left + contentWidth, y), Colors().stroke, U(1.0f));
+    y += U(10.0f);
+    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textFaint, "BLENDER");
+    y += U(20.0f);
+    const int pending = static_cast<int>(asset::ScanInbox().size());
+    dl->AddText(Text().small, Text().small->FontSize, ImVec2(left, y), Colors().textDim,
+                asset::BlenderStatus().c_str());
+    y += U(20.0f);
+    dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textFaint,
+                str::Format("%d mesh(es) waiting in the inbox", pending).c_str());
+    y += U(20.0f);
+    ImGui::SetCursorScreenPos(ImVec2(left, y));
+    if (ui::SecondaryButton("Import from Blender", ImVec2(contentWidth, U(30.0f)), pending > 0,
+                            ui::Icon::Download)) {
+        app.ImportFromBlender();
+    }
+    y += U(36.0f);
     y += U(18.0f);
     dl->AddText(Text().tiny, Text().tiny->FontSize, ImVec2(left, y), Colors().textFaint,
                 str::Format("%d actors  -  %d tris  -  %d particles", app.editor.viewportStats.actors,

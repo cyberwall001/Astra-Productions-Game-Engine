@@ -12,11 +12,21 @@ No Unity, no Unreal, no wrapper: the window layer, renderer, scene graph, crypto
 registry, offline access-code licensing, GitHub project hub and the whole UI toolkit live in
 this repository.
 
-**Milestone 2 — the level viewport.** The editor now ships a working 3D viewport: orbit /
-pan / zoom navigation, lit and wireframe view modes, a fading world grid, ground shadows,
-screen-space picking and live draw statistics. Actors carry real static meshes (cube, sphere,
-cylinder, cone, plane) instead of being abstract nodes, and the panel set follows the Unreal
-vocabulary: **World Outliner · Level Viewport · Details · Content Browser · Output Log**.
+**Milestone 3 — play it, script it, light it.** Astra now runs the level: press **Play**
+(`F5`) and the viewport possesses a first-person pawn (WASD, jump, sprint, mouse-look) with the
+editor chrome hidden. Next to it sit three new subsystems:
+
+- **AstraScript** — a real scripting language with a Blender-flavoured workspace: file column,
+  syntax-highlighted editor, console, and script-generated images. Meshes and images can be
+  authored from code. See [docs/SCRIPTING.md](docs/SCRIPTING.md).
+- **Offline path tracer** — the *Render* panel ray traces the level on every core (BVH, soft sun
+  shadows, ambient occlusion, metallic reflections, ACES tonemap) and saves a PNG.
+- **Blender bridge** — a folder-based addon (`tools/blender/astra_bridge.py`) sends meshes
+  straight into the level's mesh library. See [docs/BLENDER_BRIDGE.md](docs/BLENDER_BRIDGE.md).
+
+Under the hood: real mesh/material/particle data, soft ground shadows, volumetric light shafts
+and a cloud deck, undo/redo across the whole editor, and the UE panel vocabulary
+(**World Outliner · Level Viewport · Details · Content Browser · Output Log**).
 
 ![Astra Studio editor](docs/screenshots/09-editor.png)
 
@@ -33,7 +43,7 @@ storm volumes are a template you can drop in from the Content Browser.
 | --- | --- |
 | **Astra Studio** (`AstraStudio.exe`) | loading screen → boot sequence → sign-in → registration → project hub → editor |
 | **Astra KeyForge** (`AstraKeyForge.exe`) | owner-only tool that mints single-use engine access codes |
-| **Headless tools** | `astra_selfcheck` (216 assertions) and `astra_uipreview` (renders every screen to PNG) |
+| **Headless tools** | `astra_selfcheck` (373 assertions, 19 suites) and `astra_uipreview` (renders every screen to PNG and drives real interactions) |
 
 ### Launcher flow
 
@@ -47,15 +57,23 @@ storm volumes are a template you can drop in from the Content Browser.
 
 ### Studio
 
-| Level viewport | Settings | Command palette |
+| Level viewport | Play in editor | Script workspace |
 | --- | --- | --- |
-| ![Editor](docs/screenshots/09-editor.png) | ![Settings](docs/screenshots/10-settings.png) | ![Palette](docs/screenshots/12-command-palette.png) |
+| ![Editor](docs/screenshots/09-editor.png) | ![Play in editor](docs/screenshots/14-play-in-editor.png) | ![Script editor](docs/screenshots/16-script-editor.png) |
+
+| Path tracer | World settings | Blender import |
+| --- | --- | --- |
+| ![Render panel](docs/screenshots/15-render-panel.png) | ![World settings](docs/screenshots/17-world-settings.png) | ![Blender import](docs/screenshots/18-blender-import.png) |
+
+| Settings | Command palette | Path-traced still |
+| --- | --- | --- |
+| ![Settings](docs/screenshots/10-settings.png) | ![Palette](docs/screenshots/12-command-palette.png) | ![Ray traced](docs/screenshots/15-render-panel-raytraced.png) |
 
 ### Owner tool
 
 | Passphrase gate | Issue codes | Ledger |
 | --- | --- | --- |
-| ![Gate](docs/screenshots/13-keyforge-gate.png) | ![Generate](docs/screenshots/14-keyforge-generate.png) | ![Ledger](docs/screenshots/15-keyforge-ledger.png) |
+| ![Gate](docs/screenshots/21-keyforge-gate.png) | ![Generate](docs/screenshots/19-keyforge-generate.png) | ![Ledger](docs/screenshots/20-keyforge-ledger.png) |
 
 *(Every screenshot above is rendered from the real UI code by `astra_uipreview`, not mocked up.)*
 
@@ -70,7 +88,24 @@ storm volumes are a template you can drop in from the Content Browser.
 | `F` | Frame the selected actor (or the whole level) |
 | `Q` `W` `E` `R` | Select / Move / Rotate / Scale tool |
 | `Delete` | Delete the selected actor |
+| `Ctrl+D` | Duplicate the selected actor |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo (whole-level snapshots) |
 | `Ctrl+S` | Save the level |
+| `F5` / `Esc` | Play in editor / stop |
+
+### Play mode
+
+`F5` (or the ▶ transport button) spawns the pawn at the level's **Player Start** and hands it the
+viewport. `WASD` walks, `Shift` sprints, `Space` jumps, right-drag looks around, `Esc` stops. The
+HUD pill shows the session time; gizmos and actor icons are hidden while playing.
+
+### Script, Render and World Settings
+
+| Panel | How to open | What it does |
+| --- | --- | --- |
+| AstraScript workspace | `Ctrl+Enter` or the `</>` toolbar button | Edits and runs `.astra` scripts against the open level; shows console output and generated images |
+| Render (path tracer) | camera toolbar button, or World Settings | Traces the level on the CPU with live stats (triangles, BVH nodes, rays, ms) and saves PNGs |
+| World Settings | sliders toolbar button | Fog, cloud cover, rain, exposure, sun direction, viewport toggles, Blender bridge status |
 
 The viewport header carries the view-mode picker (Shaded, Unlit, Wireframe, Normals) plus
 toggles for grid, shadows and gizmos, and reports the CPU raster budget per frame. The bottom
@@ -121,8 +156,12 @@ src/astra/data        JSON reader/writer
 src/astra/licensing   access codes, master key, issue ledger
 src/astra/auth        accounts, sessions, registration
 src/astra/github      transport iface, WinHTTP, parsing, demo fixture
-src/astra/render      orbit camera, mesh generation, CPU viewport rasteriser, picking
-src/astra/scene       entities, components (transform/mesh/light/camera/weather), reflection
+src/astra/render      orbit camera, CPU viewport rasteriser, picking, CPU path tracer
+src/astra/scene       entities, components (transform/mesh/material/particles/light/camera/atmosphere), reflection
+src/astra/asset       procedural mesh builders, OBJ import, Blender bridge inbox
+src/astra/image       CPU image buffers: noise, blur, PNG read/write
+src/astra/script      AstraScript tokenizer, parser, interpreter, host bindings
+src/astra/game        first-person pawn used by play-in-editor
 src/astra/project     astra.project.json, scene IO, recent projects
 src/astra/ui          theme, icons, widget library, branding
 src/astra/app         AstraApp flow, screens, editor panels, KeyForge
@@ -133,12 +172,14 @@ src/tools             self-check suite and headless UI renderer
 assets/               logo, fonts, demo workspace fixture
 extern/               Dear ImGui 1.91.9b-docking, stb_image
 docs/                 architecture, security, UI guide, build + release guides, roadmap, screenshots
-tools/                packaging, screenshot capture, PNG recompression
+tools/                packaging, screenshot capture, PNG recompression, Blender addon
 ```
 
 ## Documentation
 
 * [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — layers, threading, on-disk layout, verification strategy
+* [docs/SCRIPTING.md](docs/SCRIPTING.md) — the AstraScript language, built-ins and examples
+* [docs/BLENDER_BRIDGE.md](docs/BLENDER_BRIDGE.md) — installing the Blender addon and importing meshes
 * [docs/SECURITY.md](docs/SECURITY.md) — access codes, accounts, secrets at rest, network surface
 * [docs/UI_GUIDE.md](docs/UI_GUIDE.md) — design tokens, components, layout rules, motion
 * [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md) — prerequisites, presets, packaging, troubleshooting

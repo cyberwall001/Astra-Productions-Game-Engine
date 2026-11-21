@@ -2,6 +2,7 @@
 #include <cmath>
 
 #include "astra/app/Screens.h"
+#include "astra/asset/Bridge.h"
 #include "astra/app/screens/Common.h"
 #include "astra/app/screens/EditorPanels.h"
 #include "astra/core/Strings.h"
@@ -70,8 +71,17 @@ void MenuBar(AstraApp& app, ImVec2 min, float width) {
                 ImGui::Separator();
                 if (ImGui::MenuItem("Exit Astra Studio", "Alt+F4")) app.wantsQuit = true;
             } else if (label == "Edit") {
-                if (ImGui::MenuItem("Undo", "Ctrl+Z", false, false)) {}
-                if (ImGui::MenuItem("Redo", "Ctrl+Y", false, false)) {}
+                if (ImGui::MenuItem("Undo", "Ctrl+Z", false, app.CanUndo())) app.Undo();
+                if (ImGui::MenuItem("Redo", "Ctrl+Shift+Z", false, app.CanRedo())) app.Redo();
+                ImGui::Separator();
+                if (ImGui::MenuItem("Duplicate", "Ctrl+D",
+                                    false, app.editor.selected != scene::kInvalidEntity)) {
+                    app.DuplicateSelected();
+                }
+                if (ImGui::MenuItem("Delete", "Del",
+                                    false, app.editor.selected != scene::kInvalidEntity)) {
+                    app.DeleteSelected();
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Command palette", "Ctrl+K")) app.showCommandPalette = true;
                 if (ImGui::MenuItem("Preferences...")) {
@@ -91,9 +101,25 @@ void MenuBar(AstraApp& app, ImVec2 min, float width) {
                     app.editor.selected = scene::kInvalidEntity;
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Import asset...")) {
+                if (ImGui::MenuItem("Import from Blender")) app.ImportFromBlender();
+                if (ImGui::MenuItem("Blender bridge folder...")) {
+                    app.PushToast(ToastKind::Info, "Blender bridge",
+                                  asset::InboxDirectory() + "  -  " + asset::BlenderStatus());
+                }
+                if (ImGui::MenuItem("Open script workspace", "Ctrl+Enter")) {
+                    app.OpenScriptEditor(app.script.directory.empty()
+                                             ? app.editor.project.rootPath + "/Scripts"
+                                             : app.script.directory);
+                }
+                if (ImGui::MenuItem("Render frame (path tracer)")) {
+                    app.editor.showRenderPanel = true;
+                }
+                if (ImGui::MenuItem("World settings")) {
+                    app.editor.showWorldSettings = !app.editor.showWorldSettings;
+                }
+                if (ImGui::MenuItem("Import asset (OBJ)...")) {
                     app.PushToast(ToastKind::Info, "Asset import",
-                                  "FBX/glTF import lands with the asset pipeline milestone.");
+                                  "Drop OBJ files into the bridge inbox, or use Tools > Import from Blender.");
                 }
                 if (ImGui::MenuItem("Refresh content browser")) {
                     app.SetFooterStatus("Content browser refreshed");

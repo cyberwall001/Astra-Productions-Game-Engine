@@ -1,9 +1,10 @@
 # Astra Engine roadmap
 
-Milestone 1 shipped the **studio shell**; milestone 2 (this repository state) adds the **level
-viewport** — a CPU rasteriser with orbit navigation, static meshes, view modes, picking and a
-Content Browser. The engine is a general-purpose toolchain again: weather is one optional
-system, not the premise.
+Milestone 1 shipped the **studio shell**; milestone 2 added the **level viewport** — a CPU
+rasteriser with orbit navigation, static meshes, view modes, picking and a Content Browser.
+Milestone 3 (this repository state) makes it a usable engine: **play in editor**, **AstraScript**,
+an **offline path tracer**, and a **Blender bridge**. The engine is a general-purpose toolchain
+again: weather is one optional system, not the premise.
 
 ## Milestone 1 — Studio shell ✅
 
@@ -33,17 +34,40 @@ system, not the premise.
 - [x] Neutral sandbox level by default; the storm rig survives as a template.
 - [x] Verified headlessly: 216-assertion self-check (including the renderer and picking).
 
-## Milestone 3 — GPU renderer and content pipeline
+## Milestone 3 — Playable, scriptable, importable ✅
+
+- [x] First-person pawn (`game::Player`): WASD, sprint, jump, gravity, mouse-look, eye height.
+- [x] Play in editor (`F5` / transport): spawns at the Player Start, possesses the viewport,
+      hides editor chrome, shows a session HUD; `Esc` stops.
+- [x] AstraScript: tokenizer, parser, interpreter (locals, loops, functions, arrays) plus a host
+      API for scene, mesh, image, IO and math — 60+ built-ins.
+- [x] Script workspace: file column, highlighted editor with a line gutter, run/save shortcuts,
+      console, generated-image preview. Non-Astra repositories open here instead of erroring.
+- [x] CPU path tracer: BVH, soft sun shadows, 2-ray AO, metallic reflections, Russian roulette,
+      ACES tonemap, denoise, multi-threaded, `Render` panel with live stats and PNG export.
+- [x] Blender bridge: folder-contract addon (`tools/blender/astra_bridge.py`), OBJ + sidecar
+      inbox, one-click import into the mesh library, status heartbeat.
+- [x] Mesh/material/particle data layer with a scene mesh library, eight material shaders and
+      five particle presets, all editable from Details.
+- [x] Undo/redo, duplicate and delete across the whole editor (level snapshots).
+- [x] Rendering: soft sun-aware ground shadows, volumetric light shafts, parallax cloud deck,
+      height fog, per-vertex surface shading, alpha.
+- [x] Verified headlessly: 19 suites / 373 assertions, plus `astra_uipreview` interaction tests
+      and screenshots for play mode, the render panel, the script workspace and the bridge.
+
+## Milestone 4 — GPU renderer and content pipeline
 
 - [ ] D3D12 backend (Vulkan behind a flag), render-graph skeleton, GPU timing.
 - [ ] Viewport renders to a texture with MSAA; the CPU rasteriser stays as a fallback.
-- [ ] Sky + volumetric cloud pass driven by the existing weather fields.
+- [ ] Sky + volumetric cloud pass on the GPU (the CPU volumetrics shipped in milestone 3).
+- [ ] GPU path tracer behind the same `TraceSettings` contract; the CPU tracer stays the
+      fallback and keeps reporting itself as unavailable on GPU-less builds.
+- [ ] Shader authoring: per-material shader files with hot reload on top of the eight built-ins.
 - [ ] Prefab system and content browser backed by `assets/` and `content/`.
 - [ ] Asset import pipeline (FBX/glTF via assimp, textures via stb/basis).
-- [ ] Undo/redo command stack for scene edits.
 - [ ] Ed25519 access codes: Studio keeps only the public key.
 
-## Milestone 4 — Gameplay systems
+## Milestone 5 — Gameplay systems
 
 - [ ] Deterministic fixed-step simulation + replay files.
 - [ ] Weather simulation: supercell lifecycle, hail, wind, road wetness.
@@ -51,7 +75,7 @@ system, not the premise.
 - [ ] Scenario scripting (timeline + triggers) and a scenario editor.
 - [ ] Packaging: build and ship a game from the editor (`Build → Windows x64`).
 
-## Milestone 5 — Team workflow
+## Milestone 6 — Team workflow
 
 - [ ] Accounts backed by the studio server (optional; offline stays the default).
 - [ ] Repo-aware collaboration: branch ↔ scene diff, sign-off, review notes.

@@ -17,6 +17,8 @@
 #include <vector>
 
 #include "astra/app/AstraApp.h"
+#include "astra/asset/Bridge.h"
+#include "astra/asset/MeshBuilder.h"
 #include "astra/render/ViewportRenderer.h"
 #include "astra/app/KeyForgeApp.h"
 #include "astra/app/Screens.h"
@@ -549,6 +551,33 @@ void ShotCommandPalette(astra::app::AstraApp& app) {
     app.showCommandPalette = false;
 }
 
+void ShotBlenderImport(astra::app::AstraApp& app) {
+    app.editor.showRenderPanel = false;
+    app.screen = astra::app::Screen::Editor;
+    app.transition = 1.0f;
+
+    // Simulate the addon: two meshes land in the inbox, then the editor imports them.
+    std::string error;
+    Check(astra::asset::WriteBridgeJob("Blender Torus", astra::asset::MakeTorus(24, 12, 0.30f),
+                                       "Hologram", &error),
+          "bridge accepted an exported mesh");
+    Check(astra::asset::WriteBridgeJob("Blender Cone", astra::asset::MakeCone(20), "Emissive",
+                                       &error),
+          "bridge accepted a second mesh");
+    const std::size_t before = app.editor.scene.Count();
+    app.ImportFromBlender();
+    RenderFrame([&] { app.Draw(); });
+    Check(app.editor.scene.Count() == before + 2, "both Blender meshes became actors");
+    Check(!app.editor.scene.Meshes().empty(), "imported meshes joined the level mesh library");
+
+    if (const astra::scene::Entity* actor = app.editor.scene.FindByName("Blender Torus")) {
+        app.editor.selected = actor->id;
+        astra::render::FrameSelection(app.editor.viewportCamera, app.editor.scene, actor->id);
+    }
+    for (int i = 0; i < 3; ++i) RenderFrame([&] { app.Draw(); });
+    Save("18-blender-import");
+}
+
 void ShotKeyForge(astra::app::KeyForgeApp& keyForge, bool unlocked) {
     keyForge.initialized = true;
     keyForge.ownerPath = astra::paths::Join(astra::paths::KeyForgeDataDir(), "owner.json");
@@ -559,7 +588,7 @@ void ShotKeyForge(astra::app::KeyForgeApp& keyForge, bool unlocked) {
         keyForge.stage = astra::app::KeyForgeApp::Stage::CreatePassphrase;
         RenderFrame([&] { keyForge.Draw(); });
         RenderFrame([&] { keyForge.Draw(); });
-        Save("20-keyforge-gate");
+        Save("21-keyforge-gate");
         return;
     }
 
@@ -573,13 +602,13 @@ void ShotKeyForge(astra::app::KeyForgeApp& keyForge, bool unlocked) {
     keyForge.GenerateCodes();
     RenderFrame([&] { keyForge.Draw(); });
     RenderFrame([&] { keyForge.Draw(); });
-    Save("18-keyforge-generate");
+    Save("19-keyforge-generate");
 
     keyForge.tab = astra::app::KeyForgeApp::Tab::Ledger;
     keyForge.GenerateCodes();
     RenderFrame([&] { keyForge.Draw(); });
     RenderFrame([&] { keyForge.Draw(); });
-    Save("19-keyforge-ledger");
+    Save("20-keyforge-ledger");
 }
 
 // ---------------------------------------------------------------------------
@@ -676,6 +705,7 @@ int main(int argc, char** argv) {
     ShotPlay(app);
     ShotRenderPanel(app);
     ShotScriptEditor(app);
+    ShotBlenderImport(app);
     ShotSettings(app);
     ShotCommandPalette(app);
 

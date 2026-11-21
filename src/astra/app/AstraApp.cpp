@@ -1,5 +1,7 @@
 #include "astra/app/AstraApp.h"
 
+#include "astra/asset/Bridge.h"
+
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -650,6 +652,34 @@ bool AstraApp::SaveTraceImage(std::string path) {
     editor.tracePath = path;
     SetFooterStatus("Saved render to " + path);
     return true;
+}
+
+void AstraApp::ImportFromBlender() {
+    const std::vector<asset::BridgeJob> pending = asset::ScanInbox();
+    if (pending.empty()) {
+        PushToast(ToastKind::Info, "Nothing waiting from Blender",
+                  "Use the Astra panel in Blender's sidebar to send a mesh. Folder: " +
+                      asset::InboxDirectory());
+        return;
+    }
+    PushUndo("import from Blender");
+    const asset::BridgeImportResult result = asset::ImportInbox(editor.scene);
+    if (result.imported == 0) {
+        PushToast(ToastKind::Error, "Blender import failed",
+                  result.errors.empty() ? "The inbox held no usable meshes."
+                                        : result.errors.front());
+        return;
+    }
+    if (!result.actorNames.empty()) {
+        if (const scene::Entity* actor = editor.scene.FindByName(result.actorNames.back())) {
+            editor.selected = actor->id;
+        }
+    }
+    editor.scene.MarkDirty();
+    PushToast(ToastKind::Success,
+              str::Format("Imported %d mesh(es) from Blender", result.imported),
+              str::Format("%d triangles, %d skipped", result.triangles, result.skipped));
+    SetFooterStatus(str::Format("Imported %d Blender mesh(es)", result.imported));
 }
 
 void AstraApp::RefreshDemoContent() {
